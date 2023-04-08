@@ -17,12 +17,12 @@ class DesignMatrix():
         TR: Optional[float] = None,
         high_pass_threshold: float = .01,
     ):
-        TR = self._get_TR(bold_path, TR)
+        self.TR = self._get_TR(bold_path, TR)
         self.run_build_design_matrix = False
         
         self.search_frequencies = search_frequencies
         self.high_pass_threshold = high_pass_threshold
-        self.time_points = self._get_time_points(TR, time_window)
+        self.time_points = self._get_time_points(self.TR, time_window)
         self.n_tps = len(self.time_points)
         assert np.all(self.time_points[:-1] <= self.time_points[1:]), f"`self.time_points` is not sorted in ascending order"
         
@@ -50,12 +50,12 @@ class DesignMatrix():
         plot_design_matrix(self.build_design_matrix())
         plt.show()
 
-    def get_time_indices(self, TR, time_window):
+    def get_time_indices(self, time_window):
 
         import math 
 
-        idx_1 = int(math.floor(time_window[0] / TR))
-        idx_2 = int(math.floor(time_window[1] / TR))
+        idx_1 = int(math.floor(time_window[0] / self.TR))
+        idx_2 = int(math.floor(time_window[1] / self.TR))
         
         return (idx_1, idx_2)
 
@@ -79,9 +79,9 @@ class DesignMatrix():
 
         import math
 
-        tp_1 = math.floor(time_window[0] / TR) * TR
-        tp_2 = math.floor(time_window[1] / TR) * TR
-        time_points = np.arange(tp_1, tp_2 + (TR/10), TR)
+        tp_1 = math.floor(time_window[0] / self.TR) * self.TR
+        tp_2 = math.floor(time_window[1] / self.TR) * self.TR
+        time_points = np.arange(tp_1, tp_2 + (self.TR/10), self.TR)
         time_points -= time_points[0]
 
         return time_points
