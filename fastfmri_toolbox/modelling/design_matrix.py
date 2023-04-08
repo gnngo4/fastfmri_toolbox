@@ -1,21 +1,23 @@
 from pathlib import Path
-from typing import Union, List, Dict, Tuple
+from typing import Optional, Union, List, Tuple
 import itertools
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import nibabel as nib
 
 class DesignMatrix():
     
     def __init__(
         self,
-        TR: float,
         time_window: Tuple[float, float], 
         search_frequencies: List[float],
+        bold_path: Union[str, Path, None] = None,
+        TR: Optional[float] = None,
         high_pass_threshold: float = .01,
     ):
-        
+        TR = self._get_TR(bold_path, TR)
         self.run_build_design_matrix = False
         
         self.search_frequencies = search_frequencies
@@ -47,6 +49,31 @@ class DesignMatrix():
         
         plot_design_matrix(self.build_design_matrix())
         plt.show()
+
+    def get_time_indices(self, TR, time_window):
+
+        import math 
+
+        idx_1 = int(math.floor(time_window[0] / TR))
+        idx_2 = int(math.floor(time_window[1] / TR))
+        
+        return (idx_1, idx_2)
+
+    def _get_TR(
+        self, 
+        bold_path: Union[str, Path, None] = None,
+        TR: Optional[float] = None
+    ) -> float:
+
+        if bold_path is not None:
+            bold_path = Path(bold_path).resolve()
+            if not bold_path.exists():
+                raise FileNotFoundError(f"Error: file path does not exist [{bold_path}]")
+            return nib.load(bold_path).header.get_zooms()[-1]
+        elif TR is not None:
+            return TR
+        else:
+            raise ValueError("Error: either `bold_path` or `TR` must be provided.")
 
     def _get_time_points(self, TR, time_window):
 
