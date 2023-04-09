@@ -15,7 +15,14 @@ PATH_STEMS = {
     'residual': 'residual_bold.nii.gz',
     'windowed': 'windowed_bold.nii.gz',
 }
-FREQUENCY_GLM_BASIS = ['sine','cosine']
+FREQUENCY_GLM_BASIS = [
+    'sine',
+    'cosine',
+]
+SAVE_SINGLE_CONTRASTS = [
+    'basis-cosine',
+    'basis-sine',
+]
 
 class FirstLevelAnalysis():
     
@@ -47,10 +54,17 @@ class FirstLevelAnalysis():
         
     def run_frequency_glm(
         self,
-        out_windowed_bold: bool = False,
-        out_predicted: bool = False,
-        out_residual: bool = False,
+        save_windowed_bold: bool = False,
+        save_predicted: bool = False,
+        save_residual: bool = False,
+        save_additional_single_contrasts: Union[str, List[str], None] = None,
     ) -> None:
+
+        self.save_single_contrast_list = self._get_single_contrast_list(save_additional_single_contrasts)
+
+        store_contrasts, store_contrast_results = False, {}
+        if save_predicted or save_residual:
+            store_contrasts = True
         
         # Instantiate FirstLevelModel object
         flm = FirstLevelModel(
@@ -62,21 +76,31 @@ class FirstLevelAnalysis():
         
         # Window the inputted `bold_path` using the `window_indices`
         windowed_bold_img = self._window_image()
-        if out_windowed_bold:
+        if save_windowed_bold:
             nib.save(windowed_bold_img, f"{self.directory_tree['GLM']}/{PATH_STEMS['windowed']}")
         
         # Fit
-        flm.fit(windowed_bold_img,design_matrices=self.design_matrix)
+        flm.fit(windowed_bold_img, design_matrices=self.design_matrix)
         
         # Compute single contrast for each predictor
         single_contrasts = self._make_contrasts()
         for regressor_label, single_contrast in single_contrasts.items():
             # Compute single variable contrast
             single_contrast_results = flm.compute_contrast(single_contrast, output_type='all')
+            if store_contrasts:
+                store_contrast_results[regressor_label] = single_contrast_results
             # Save all outputs
-            for k, v in single_contrast_results.items():
-                nib.save(v,f"{self.directory_tree['GLM']}/{regressor_label}_{k}.nii.gz")
-                
+            if any([i in regressor_label for i in self.save_single_contrast_list]):
+                for k, v in single_contrast_results.items():
+                    nib.save(v,f"{self.directory_tree['GLM']}/{regressor_label}_{k}.nii.gz")
+
+        # Compute phaseshift between sine and cosine fits
+        for f in self.search_frequencies:
+            A = nib.load(f"{self.directory_tree['GLM']}/basis-cosine_f-{f}_effect_size.nii.gz")
+            B = nib.load(f"{self.directory_tree['GLM']}/basis-sine_f-{f}_effect_size.nii.gz")
+            phi_img = nib.Nifti1Image(np.arctan2(B.get_fdata(),A.get_fdata()),affine=A.affine,header=A.header)
+            nib.save(phi_img,f"{self.directory_tree['GLM']}/frequency-{f}_phaseshift.nii.gz")
+        
         # Compute F-statistic contrast for each search frequency
         for f in self.search_frequencies:
             # Create F-stat contrast for search frequency, `f`
@@ -87,15 +111,15 @@ class FirstLevelAnalysis():
             for k, v in F_contrast_results.items():
                 nib.save(v, f"{self.directory_tree['GLM']}/frequency-{f}_{k}.nii.gz")
                 
-        if out_predicted or out_residual:
+        if store_contrasts:
             
             for ix, regressor_label in enumerate(single_contrasts.keys()):
                 if ix == 0:
-                    predicted_data = nib.load(f"{self.directory_tree['GLM']}/{regressor_label}_effect_size.nii.gz").get_fdata()[:,:,:,np.newaxis] * self.design_matrix[regressor_label].values[np.newaxis,np.newaxis,np.newaxis,:]
+                    predicted_data = store_contrast_results[regressor_label]['effect_size'].get_fdata()[:,:,:,np.newaxis] * self.design_matrix[regressor_label].values[np.newaxis,np.newaxis,np.newaxis,:]
                 else:
-                    predicted_data += nib.load(f"{self.directory_tree['GLM']}/{regressor_label}_effect_size.nii.gz").get_fdata()[:,:,:,np.newaxis] * self.design_matrix[regressor_label].values[np.newaxis,np.newaxis,np.newaxis,:]
+                    predicted_data += store_contrast_results[regressor_label]['effect_size'].get_fdata()[:,:,:,np.newaxis] * self.design_matrix[regressor_label].values[np.newaxis,np.newaxis,np.newaxis,:]
             
-            if out_predicted:
+            if save_predicted:
                 predicted_img = nib.Nifti1Image(
                     predicted_data, 
                     affine=windowed_bold_img.affine,
@@ -103,7 +127,7 @@ class FirstLevelAnalysis():
                 )
                 nib.save(predicted_img, f"{self.directory_tree['GLM']}/{PATH_STEMS['predicted']}")
                 
-            if out_residual:                
+            if save_residual:                
                 residual_data = (windowed_bold_img.get_fdata() * nib.load(self.mask_path).get_fdata()[:,:,:,np.newaxis]) - predicted_data
                 residual_img = nib.Nifti1Image(
                     residual_data,
@@ -111,6 +135,17 @@ class FirstLevelAnalysis():
                     header=windowed_bold_img.header
                 )
                 nib.save(residual_img, f"{self.directory_tree['GLM']}/{PATH_STEMS['residual']}")
+    
+    def _get_single_contrast_list(self, save_additional_single_contrasts):
+
+        if save_additional_single_contrasts is None:
+            save_single_contrast_labels = SAVE_SINGLE_CONTRASTS
+        elif isinstance(save_additional_single_contrasts, str):
+            save_single_contrast_labels = SAVE_SINGLE_CONTRASTS + [save_additional_single_contrasts]
+        else:
+            save_single_contrast_labels = SAVE_SINGLE_CONTRASTS + save_additional_single_contrasts
+
+        return save_single_contrast_labels
         
     def _get_path_info(self) -> None:
         
