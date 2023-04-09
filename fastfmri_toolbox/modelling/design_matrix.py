@@ -50,7 +50,7 @@ class DesignMatrix():
         plot_design_matrix(self.build_design_matrix())
         plt.show()
 
-    def get_time_indices(self, time_window):
+    def get_time_indices(self, time_window: Tuple[float, float]) -> Tuple[int, int]:
 
         import math 
 
@@ -70,12 +70,14 @@ class DesignMatrix():
             if not bold_path.exists():
                 raise FileNotFoundError(f"Error: file path does not exist [{bold_path}]")
             return nib.load(bold_path).header.get_zooms()[-1]
+
         elif TR is not None:
             return TR
+            
         else:
             raise ValueError("Error: either `bold_path` or `TR` must be provided.")
 
-    def _get_time_points(self, TR, time_window):
+    def _get_time_points(self, TR: float, time_window: Tuple[float, float]) -> Tuple[float, float]:
 
         import math
 

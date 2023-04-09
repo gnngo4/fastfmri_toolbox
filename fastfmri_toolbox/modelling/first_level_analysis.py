@@ -43,7 +43,7 @@ class FirstLevelAnalysis():
         self._get_path_info()
         self._make_directory_tree()
         
-        self.TR = nib.load(self.bold_path).header.get_zooms()[-1]
+        self.TR: float = nib.load(self.bold_path).header.get_zooms()[-1]
         self.design_matrix = design_matrix
         self.search_frequencies = search_frequencies
         self.window_indices = self._get_time_indices(time_window)
@@ -136,7 +136,7 @@ class FirstLevelAnalysis():
                 )
                 nib.save(residual_img, f"{self.directory_tree['GLM']}/{PATH_STEMS['residual']}")
     
-    def _get_single_contrast_list(self, save_additional_single_contrasts):
+    def _get_single_contrast_list(self, save_additional_single_contrasts: Union[str, List[str], None]) -> List[str]:
 
         if save_additional_single_contrasts is None:
             save_single_contrast_labels = SAVE_SINGLE_CONTRASTS
@@ -180,7 +180,7 @@ class FirstLevelAnalysis():
         
     def _design_matrix_validator(self) -> None:
         
-        for ix, (f, _basis) in enumerate(itertools.product(self.search_frequencies,FREQUENCY_GLM_BASIS)):
+        for f, _basis in itertools.product(self.search_frequencies,FREQUENCY_GLM_BASIS):
             assert f"basis-{_basis}_f-{f}" in self.design_matrix.columns, f"[basis-{_basis}_f-{f}] not found in the design matrix."
             
     def _make_contrasts(self) -> Dict[str,np.ndarray]:
