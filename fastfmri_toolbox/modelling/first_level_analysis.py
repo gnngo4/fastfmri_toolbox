@@ -96,8 +96,8 @@ class FirstLevelAnalysis():
 
         # Compute phaseshift between sine and cosine fits
         for f in self.search_frequencies:
-            A = nib.load(f"{self.directory_tree['GLM']}/basis-cosine_f-{f}_effect_size.nii.gz")
-            B = nib.load(f"{self.directory_tree['GLM']}/basis-sine_f-{f}_effect_size.nii.gz")
+            B = nib.load(f"{self.directory_tree['GLM']}/basis-cosine_f-{f}_effect_size.nii.gz")
+            A = nib.load(f"{self.directory_tree['GLM']}/basis-sine_f-{f}_effect_size.nii.gz")
             phi_img = nib.Nifti1Image(np.arctan2(B.get_fdata(),A.get_fdata()),affine=A.affine,header=A.header)
             nib.save(phi_img,f"{self.directory_tree['GLM']}/frequency-{f}_phaseshift.nii.gz")
         
