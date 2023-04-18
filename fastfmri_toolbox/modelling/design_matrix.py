@@ -26,7 +26,7 @@ class DesignMatrix:
         self.n_tps = len(self.time_points)
         assert np.all(
             self.time_points[:-1] <= self.time_points[1:]
-        ), f"`self.time_points` is not sorted in ascending order"
+        ), "`self.time_points` is not sorted in ascending order"
 
         # design matrix variables
         self.design_matrix = np.zeros((self.n_tps, 0))
@@ -105,6 +105,8 @@ class DesignMatrix:
         self.column_names += column_names
 
     def _drift_regressors(self):
+        from warnings import warn
+
         n_times = np.arange(self.n_tps)
         dt = (self.time_points[-1] - self.time_points[0]) / (self.n_tps - 1)
         if self.high_pass_threshold * dt >= 0.5:

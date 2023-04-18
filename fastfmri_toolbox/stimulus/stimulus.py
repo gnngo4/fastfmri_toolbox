@@ -34,9 +34,11 @@ class Stimulus:
         """
         n_timepoints_stim_off = int(self.start_time / self.TR)
         delay = self.start_time - self.TR * n_timepoints_stim_off  # seconds
-        assert (
-            delay > 0
-        ), f"Delay (seconds) between acquired fMRI volume and stimulus start time must be positive."
+        DELAY_ERROR_MSG = (
+            "Delay (seconds) between acquired fMRI volume and stimulus start time "
+            "must be positive."
+        )
+        assert delay > 0, DELAY_ERROR_MSG
 
         # Stimulus OFF (@ start)
         if self.start_on:
