@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Optional, Union
+from typing import Optional, Union, Tuple, List
 
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
@@ -10,14 +10,15 @@ import nibabel as nib
 class PlotSlices:
     def __init__(
         self,
-        base_nifti_path: Union[str, Path],
+        base_nifti_path: Union[str, Path, nib.Nifti1Image],
         n_cols: int = 10,
+        z_slice_range: Union[None, Tuple[int, int]] = None,
     ):
         self.num_cols = n_cols
-        self.base_data = self._load_nifti_path(base_nifti_path)
-        self.base_z_indices = self._get_z_indices(self.base_data)
+        self.base_data = self._load_base_nifti(base_nifti_path)
+        self.base_z_indices = self._get_z_indices(self.base_data, z_slice_range)
 
-    def plot_base(self, base_vmax: Union[float, None] = None):
+    def plot_base(self, cmap: str = 'gray', base_vmax: Union[float, None] = None):
         
         x_max, y_max, z_max = self.base_data.shape
         self.num_slices: int = len(self.base_z_indices)
@@ -38,7 +39,7 @@ class PlotSlices:
             if self.num_rows == 1:
                 self.axes[col].imshow(
                     self.base_data[:,:,z_slice],
-                    cmap = 'gray',
+                    cmap = cmap,
                     vmax = base_vmax,
                     zorder = 1,
                 )
@@ -57,7 +58,7 @@ class PlotSlices:
                 )
                 self.axes[row, col].text(
                     int(.02*x_max),
-                    int(.1*y_max),
+                    int(.15*y_max),
                     f"z={z_slice}",
                     c='white'
                 )
@@ -70,7 +71,8 @@ class PlotSlices:
                 else:
                     self.axes[self.num_rows - 1, j].axis('off')
 
-        plt.subplots_adjust(wspace=0.05, hspace=0.05) 
+        plt.subplots_adjust(wspace=0.05, hspace=0.05)
+        self._turn_off_axis()
     
     def add_contours(
         self, 
@@ -82,8 +84,7 @@ class PlotSlices:
 
         from skimage import measure
 
-        self._assert_base_match(mask_nifti_path)
-        mask_data = nib.load(mask_nifti_path).get_fdata()
+        mask_data = self._validate_nifti(mask_nifti_path)
         mask_data[mask_data != 0] = 1 # Binarize all values not equal to zero
         
         for i, z_slice in enumerate(self.base_z_indices):
@@ -97,29 +98,84 @@ class PlotSlices:
                 for contour in contours:
                     self.axes[row, col].plot(contour[:,1],contour[:,0],linewidth=lw, color=c, zorder=zorder)
 
-    def _assert_base_match(self, nifti_path: Union[str, Path]):
-        nifti_path = Path(nifti_path).resolve()
-        assert nifti_path.name.endswith("nii.gz"), f"{nifti_path.name} must end with [nii.gz]"
-        nifti_data = nib.load(nifti_path).get_fdata()
-        assert nifti_data.shape == self.base_data.shape, f"{nifti_path} [{nifti_data.shape}] != [{self.base_data.shape}]"
-
-
-    def _load_nifti_path(self, nifti_path: Union[str, Path]):
+    def add_overlay(
+        self,
+        overlay_nifti: Union[str, Path, nib.Nifti1Image],
+        threshold: float,
+        cmap: str = 'magma',
+        alpha: float = 1.0,
+        vmax: Union[float, None] = None,
+        zorder: int = 3,
+    ):
         
-        nifti_path = Path(nifti_path).resolve()
-        assert nifti_path.name.endswith("nii.gz"), f"{nifti_path.name} must end with [nii.gz]"
-        if not nifti_path.exists():
-            raise FileNotFoundError(
-                f"Error: file path does not exist [{nifti_path}]"
-            )
+        data = self._validate_nifti(overlay_nifti)
+        if vmax is None:
+            vmax = data.max()
+
+        for i, z_slice in enumerate(self.base_z_indices):
+            row = i // self.num_cols
+            col = i % self.num_cols
+            slice_data = data[:,:,z_slice]
+            masked_slice_data = np.ma.masked_where(slice_data <= threshold, slice_data)
+            if self.num_rows == 1:
+                self.axes[col].imshow(masked_slice_data, cmap=cmap, alpha=alpha, interpolation='none', zorder=zorder, vmax=vmax)
+            else:
+                self.axes[row, col].imshow(masked_slice_data, cmap=cmap, alpha=alpha, interpolation='none', zorder=zorder, vmax=vmax)
+
+    def _turn_off_axis(self):
+
+        for ax in self.axes.flatten():
+            ax.set_xticks([])
+            ax.set_xticklabels([])
+            ax.set_yticks([])
+            ax.set_yticklabels([])
+    
+    def _load_base_nifti(self, nifti: Union[str, Path, nib.Nifti1Image]) -> np.ndarray:
+        """
+        Convert str, Path, or nib.Nifti1Image into numpy array.
+        Numpy array is generated for the base image.
+        """
         
-        data = nib.load(nifti_path).get_fdata()
+        if isinstance(nifti, nib.Nifti1Image):
+            data = nifti.get_fdata()
+        else:
+            nifti = Path(nifti).resolve()
+            assert nifti.name.endswith("nii.gz"), f"{nifti.name} must end with [nii.gz]"
+            if not nifti.exists():
+                raise FileNotFoundError(
+                    f"Error: file path does not exist [{nifti}]"
+                )
+            data = nib.load(nifti).get_fdata()
+        
+        # Image must be 3D or 4D
         n_dims = len(data.shape)
         assert n_dims in [3,4], f"{n_dims} must be 3 or 4"
 
+        # If 4D, the base image is the temporal mean image
         return data if len(data.shape) == 3 else np.mean(data, axis=-1)
     
-    def _get_z_indices(self, nifti_data: np.ndarray):
+    def _validate_nifti(self, nifti: Union[str, Path, nib.Nifti1Image]) -> np.ndarray:
+        """
+        Convert str, Path, or nib.Nifti1Image into numpy array.
+        Ensure dimensions matches the base image.
+        """
+        if isinstance(nifti, nib.Nifti1Image):
+            data = nifti.get_fdata()
+        else:
+            data = nib.load(nifti).get_fdata()
 
+        assert data.shape == self.base_data.shape, f"Dimensions does not match with base image [{self.base_data.shape}]"
+
+        return data
+    
+    def _get_z_indices(self, nifti_data: np.ndarray, z_slice_range: Union[None, Tuple[int, int]]) -> List[int]:
+        """
+        Return list of indices corresponding to z-slices that are not empty
+        """
         num_slices = nifti_data.shape[-1]
-        return [i for i in range(num_slices) if not np.all(np.equal(nifti_data[:,:,i],0))]
+        z_slices = [i for i in range(num_slices) if not np.all(np.equal(nifti_data[:,:,i],0))]
+        if z_slice_range is None:
+            return z_slices
+        else:
+            assert z_slice_range[1] > z_slice_range[0]
+            return z_slices[z_slice_range[0]:z_slice_range[1]]
