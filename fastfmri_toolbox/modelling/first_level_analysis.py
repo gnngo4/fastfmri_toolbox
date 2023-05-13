@@ -42,7 +42,7 @@ class FirstLevelAnalysis:
         self._get_path_info()
         self._make_directory_tree()
 
-        self.TR: float = nib.load(self.bold_path).header.get_zooms()[-1]
+        self.TR: float = float(nib.load(self.bold_path).header.get_zooms()[-1])
         self.design_matrix = design_matrix
         self.search_frequencies = search_frequencies
         self.window_indices = self._get_time_indices(time_window)
