@@ -1,0 +1,17 @@
+# unless otherwise specified, hooks run on push only
+default_stages: [push]
+repos:
+  - repo: https://github.com/crate-ci/typos
+    rev: v1.13.23
+    hooks:
+      - id: typos
+        stages: [commit]
+  - repo: local
+    hooks:
+      - id: black
+        name: black
+        stages: [commit]
+        entry: pipenv run black
+        language: system
+        types: [python]
+        require_serial: true
