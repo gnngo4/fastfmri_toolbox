@@ -137,6 +137,27 @@ class MotionParameters(DesignMatrixRegressors):
         else:
             raise ValueError("`self.mc_params` must be set to 6 or 24")
 
+class MeanSignalRegressors(DesignMatrixRegressors):
+    """
+    Generate regressors for mean GM, WM, CSF, Global signal
+    """
+    pass
+
+class CompCorRegressors(DesignMatrixRegressors):
+    """
+    Generate CompCor regressors for certain cases
+    (1) X regressors thta explain a n% variance
+    (2) Select top n regressors
+    also, consider the different type of compcor regressors
+    that are readily available. i.e., wm, csf, edge compcor
+    """
+    pass
+
+class ScrubbingRegressors(DesignMatrixRegressors):
+    """
+    Generate motion scrubbing regressors based on a FD or DVARS
+    """
+    pass
 
 class DesignMatrix:
     def __init__(
