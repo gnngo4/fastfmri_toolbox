@@ -119,7 +119,7 @@ class MotionParameters(DesignMatrixRegressors):
         regressors = confounds[col_names][idx_1:idx_2].values
         return (regressors, col_names)
 
-    def _get_column_names(self):
+    def _get_column_names(self) -> List[str]:
         MOTION_BASE: List[str] = ["trans", "rot"]
         MOTION_DIR: List[str] = ["x", "y", "z"]
         MOTION_SUFFIX: List[str] = ["derivative1", "power2", "derivative1_power2"]
@@ -137,27 +137,81 @@ class MotionParameters(DesignMatrixRegressors):
         else:
             raise ValueError("`self.mc_params` must be set to 6 or 24")
 
+
 class MeanSignalRegressors(DesignMatrixRegressors):
     """
     Generate regressors for mean GM, WM, CSF, Global signal
     """
-    pass
+
+    def __init__(
+        self,
+        time_indices: Tuple[int, int],
+        regressor_type: Literal["Global", "WM", "CSF", "CSF+WM"],
+        higher_order_flag: bool = False,
+    ):
+        super().__init__()
+        self.confounds_required = True
+        self.time_indices = time_indices
+        self.regressor_type = regressor_type
+        self.higher_order_flag = higher_order_flag
+
+    def get(self, confounds: Optional[pd.DataFrame] = None):
+        assert confounds is not None, f"`confounds` must be specified to use this class"
+        col_names = self._get_column_names()
+        idx_1, idx_2 = self.time_indices[0], self.time_indices[1] + 1
+        regressors = confounds[col_names][idx_1:idx_2].values
+        return (regressors, col_names)
+
+    def _get_column_names(self):
+        if self.regressor_type == "Global":
+            REGRESSOR_BASE = ["global_signal"]
+        elif self.regressor_type == "WM":
+            REGRESSOR_BASE = ["white_matter"]
+        elif self.regressor_type == "CSF":
+            REGRESSOR_BASE = ["csf"]
+        elif self.regressor_type == "CSF+WM":
+            REGRESSOR_BASE = ["csf_wm"]
+        else:
+            raise ValueError(
+                "`self.regressor_type` must be in [Global, WM, CSF, or CSF+WM]"
+            )
+
+        if self.higher_order_flag and self.regressor_type != "CSF+WM":
+            return self._add_derivatives(REGRESSOR_BASE)
+        elif self.higher_order_flag and self.regressor_type == "CSF+WM":
+            raise ValueError(
+                "`self.regressor_type` == 'CSF+WM' does not have higher order regressors"
+            )
+        else:
+            return REGRESSOR_BASE
+
+    def _add_derivatives(self, REGRESSOR_BASE: List[str]):
+        REGRESSOR_SUFFIX = ["derivative1", "power2", "derivative1_power2"]
+        return REGRESSOR_BASE + [
+            "_".join(list(i))
+            for i in itertools.product(REGRESSOR_BASE, REGRESSOR_SUFFIX)
+        ]
+
 
 class CompCorRegressors(DesignMatrixRegressors):
     """
     Generate CompCor regressors for certain cases
-    (1) X regressors thta explain a n% variance
+    (1) X regressors that explain a n% variance
     (2) Select top n regressors
     also, consider the different type of compcor regressors
     that are readily available. i.e., wm, csf, edge compcor
     """
+
     pass
+
 
 class ScrubbingRegressors(DesignMatrixRegressors):
     """
     Generate motion scrubbing regressors based on a FD or DVARS
     """
+
     pass
+
 
 class DesignMatrix:
     def __init__(
