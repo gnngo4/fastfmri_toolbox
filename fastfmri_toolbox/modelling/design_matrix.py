@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Optional, Union, List, Tuple, Literal
+from typing import Optional, Union, Tuple, Dict, List, Literal
 from warnings import warn
 
 import matplotlib.pyplot as plt
@@ -12,6 +12,7 @@ import itertools
 class DesignMatrixRegressors:
     def __init__(self):
         self.confounds_required = False
+        self.confounds_metadata_required = False
 
     def get(
         self, confounds: Optional[pd.DataFrame] = None
@@ -27,12 +28,15 @@ class FrequencyRegressors(DesignMatrixRegressors):
     ):
         super().__init__()
         self.confounds_required = False
+        self.confounds_metadata_required = False
         self.search_frequencies = search_frequencies
         self.time_points = time_points
         self.n_tps = len(self.time_points)
 
     def get(
-        self, confounds: Optional[pd.DataFrame] = None
+        self,
+        confounds: Optional[pd.DataFrame] = None,
+        confounds_metadata: Optional[Dict[str, Dict[str, float]]] = None,
     ) -> Tuple[np.ndarray, List[str]]:
         column_names = []
         basis = ["sine", "cosine"]
@@ -59,13 +63,16 @@ class DriftRegressors(DesignMatrixRegressors):
     ):
         super().__init__()
         self.confounds_required = False
+        self.confounds_metadata_required = False
         self.time_points = time_points
         self.high_pass_threshold = high_pass_threshold
         self.add_constant = add_constant
         self.n_tps = len(self.time_points)
 
     def get(
-        self, confounds: Optional[pd.DataFrame] = None
+        self,
+        confounds: Optional[pd.DataFrame] = None,
+        confounds_metadata: Optional[Dict[str, Dict[str, float]]] = None,
     ) -> Tuple[np.ndarray, List[str]]:
         n_times = np.arange(self.n_tps)
         dt = (self.time_points[-1] - self.time_points[0]) / (self.n_tps - 1)
@@ -109,10 +116,15 @@ class MotionParameters(DesignMatrixRegressors):
     ):
         super().__init__()
         self.confounds_required = True
+        self.confounds_metadata_required = False
         self.time_indices = time_indices
         self.mc_params = mc_params
 
-    def get(self, confounds: Optional[pd.DataFrame] = None):
+    def get(
+        self,
+        confounds: Optional[pd.DataFrame] = None,
+        confounds_metadata: Optional[Dict[str, Dict[str, float]]] = None,
+    ) -> Tuple[np.ndarray, List[str]]:
         assert confounds is not None, f"`confounds` must be specified to use this class"
         col_names = self._get_column_names()
         idx_1, idx_2 = self.time_indices[0], self.time_indices[1] + 1
@@ -151,11 +163,16 @@ class MeanSignalRegressors(DesignMatrixRegressors):
     ):
         super().__init__()
         self.confounds_required = True
+        self.confounds_metadata_required = False
         self.time_indices = time_indices
         self.regressor_type = regressor_type
         self.higher_order_flag = higher_order_flag
 
-    def get(self, confounds: Optional[pd.DataFrame] = None):
+    def get(
+        self,
+        confounds: Optional[pd.DataFrame] = None,
+        confounds_metadata: Optional[Dict[str, Dict[str, float]]] = None,
+    ) -> Tuple[np.ndarray, List[str]]:
         assert confounds is not None, f"`confounds` must be specified to use this class"
         col_names = self._get_column_names()
         idx_1, idx_2 = self.time_indices[0], self.time_indices[1] + 1
@@ -202,7 +219,87 @@ class CompCorRegressors(DesignMatrixRegressors):
     that are readily available. i.e., wm, csf, edge compcor
     """
 
-    pass
+    def __init__(
+        self,
+        time_indices: Tuple[int, int],
+        regressor_type: Literal["WM", "CSF", "CSF+WM", "Temporal"],
+        top_n_components: Optional[int] = None,
+        variance_explained: Optional[float] = None,
+    ):
+        super().__init__()
+        self.confounds_required = True
+        self.confounds_metadata_required = True
+        self.time_indices = time_indices
+        self.regressor_type = regressor_type
+        self.top_n_components = top_n_components
+        self.variance_explained = variance_explained
+
+    def get(
+        self,
+        confounds: Optional[pd.DataFrame] = None,
+        confounds_metadata: Optional[Dict[str, Dict[str, float]]] = None,
+    ) -> Tuple[np.ndarray, List[str]]:
+        assert confounds is not None, "`confounds` must be specified to use this class"
+        assert (
+            confounds_metadata is not None
+        ), "`confounds_metadata` must be specified to use this class"
+        col_names = self._get_column_names(confounds_metadata)
+        idx_1, idx_2 = self.time_indices[0], self.time_indices[1] + 1
+        regressors = confounds[col_names][idx_1:idx_2].values
+        return (regressors, col_names)
+
+    def _get_column_names(self, confounds_metadata: Dict[str, Dict[str, float]]):
+        if self.top_n_components is not None and self.variance_explained is None:
+            return self._get_top_n_regressors(confounds_metadata)
+        elif self.top_n_components is None and self.variance_explained is not None:
+            return self._get_regressors_by_variance_explained(confounds_metadata)
+        else:
+            raise ValueError(
+                "Error: Only one of `self.top_n_components` or `self.variance_explained` must be specified."
+            )
+
+    def _get_top_n_regressors(self, confounds_metadata: Dict[str, Dict[str, float]]):
+        assert self.top_n_components is not None, f"`self.top_n_components` is None"
+        col_names = self._filter_regressors(confounds_metadata)
+        return col_names[: self.top_n_components]
+
+    def _get_regressors_by_variance_explained(
+        self, confounds_metadata: Dict[str, Dict[str, float]]
+    ):
+        assert self.variance_explained is not None, f"`self.variance_explained` is None"
+        col_names = []
+        _col_names = self._filter_regressors(confounds_metadata)
+        for col in _col_names:
+            cum_var = confounds_metadata[col]["CumulativeVarianceExplained"]
+            col_names.append(col)
+            if cum_var > self.variance_explained:
+                break
+        return col_names
+
+    def _filter_regressors(self, confounds_metadata: Dict[str, Dict[str, float]]):
+        regressor_type_mapping = {
+            "WM": "w_comp_cor",
+            "CSF": "c_comp_cor",
+            "CSF+WM": "a_comp_cor",
+            "Temporal": "t_comp_cor",
+        }
+
+        cols = [
+            col
+            for col in confounds_metadata.keys()
+            if regressor_type_mapping[self.regressor_type] in col
+        ]
+
+        # Check if comp cor regressors are ordered in by CumulativeVarianceExplained
+        track_cum_var = 0  # Set tracker
+        for col in cols:
+            cum_var = confounds_metadata[col]["CumulativeVarianceExplained"]
+            assert (
+                cum_var > track_cum_var
+            ), "Regressor labels are not ordered in ascending values [cumulative variance explained]"
+            track_cum_var = cum_var  # Update tracker
+
+        return cols
 
 
 class ScrubbingRegressors(DesignMatrixRegressors):
@@ -239,9 +336,16 @@ class DesignMatrix:
         self.column_names = []
 
     def add_regressor(self, regressors: DesignMatrixRegressors) -> None:
-        if regressors.confounds_required:
+        if regressors.confounds_required and not regressors.confounds_metadata_required:
             confounds_df = self._get_confounds(self.bold_path, self.confounds_tsv)
             regressors_array, regressor_labels = regressors.get(confounds_df)
+        elif regressors.confounds_required and regressors.confounds_metadata_required:
+            assert self.bold_path is not None, "`self.bold_path` must be specified"
+            confounds_df = self._get_confounds(self.bold_path, self.confounds_tsv)
+            confounds_metadata = self._get_confounds_metadata(self.bold_path)
+            regressors_array, regressor_labels = regressors.get(
+                confounds_df, confounds_metadata
+            )
         else:
             regressors_array, regressor_labels = regressors.get()
 
@@ -326,6 +430,17 @@ class DesignMatrix:
                     f"Error: file path does not exist [{confounds_tsv}]"
                 )
             return pd.read_csv(confounds_tsv, sep="\t")
+
+    def _get_confounds_metadata(
+        self, bold_path: Union[str, Path]
+    ) -> Dict[str, Dict[str, float]]:
+        import json
+
+        json_path = self._get_confounds_path(bold_path, "metadata")
+        with open(json_path) as json_file:
+            json_data = json.load(json_file)
+
+        return json_data
 
     def _get_confounds_path(
         self, bold_path: Union[str, Path], desc: Literal["tsv", "metadata"]
