@@ -307,7 +307,67 @@ class ScrubbingRegressors(DesignMatrixRegressors):
     Generate motion scrubbing regressors based on a FD or DVARS
     """
 
-    pass
+    def __init__(
+        self,
+        time_indices: Tuple[int, int],
+        movement_param: Literal["DVARS", "FD"],
+        movement_threshold: float,
+    ):
+        super().__init__()
+        self.confounds_required = True
+        self.confounds_metadata_required = False
+        self.time_indices = time_indices
+        self.movement_param = movement_param
+        self.movement_threshold = movement_threshold
+
+    def get(
+        self,
+        confounds: Optional[pd.DataFrame] = None,
+        confounds_metadata: Optional[Dict[str, Dict[str, float]]] = None,
+    ) -> Tuple[np.ndarray, List[str]]:
+        assert confounds is not None, f"`confounds` must be specified to use this class"
+
+        col_names = self._get_column_names()
+        idx_1, idx_2 = self.time_indices[0], self.time_indices[1] + 1
+        regressors = confounds[col_names][idx_1:idx_2].values
+        regressors, col_names = self._convert_to_scrubbing_regressors(regressors)
+        return (regressors, col_names)
+
+    def _get_column_names(self):
+        if self.movement_param == "DVARS":
+            REGRESSOR_BASE = ["dvars"]
+        elif self.movement_param == "FD":
+            REGRESSOR_BASE = ["framewise_displacement"]
+        else:
+            raise ValueError("`self.regressor_type` must be in [DVARS, FD]")
+
+        return REGRESSOR_BASE
+
+    def _convert_to_scrubbing_regressors(
+        self, regressors: np.ndarray
+    ) -> Tuple[np.ndarray, List[str]]:
+        regressors = regressors >= self.movement_threshold
+        n_regressors = regressors.sum()
+        if n_regressors == 0:
+            return (np.array([0]), [])
+        else:
+            # Set-up new regressors and labels
+            new_regressors = np.zeros((regressors.shape[0], n_regressors))
+            new_col_names = []
+
+            coords = np.where(regressors)[0]
+            for idx, coord_idx in enumerate(coords):
+                new_regressors[coord_idx, idx] = 1
+                new_col_names.append(f"scrubbing_{str(idx).zfill(3)}")
+
+            assert (
+                regressors.reshape(
+                    regressors.size,
+                )
+                == new_regressors.sum(1)
+            ).sum() == regressors.size
+
+            return (new_regressors, new_col_names)
 
 
 class DesignMatrix:
@@ -350,8 +410,11 @@ class DesignMatrix:
             regressors_array, regressor_labels = regressors.get()
 
         # Update design_matrix and column_names
-        self.design_matrix = np.hstack((self.design_matrix, regressors_array))
-        self.column_names += regressor_labels
+        if len(regressor_labels) == 0:
+            return
+        else:
+            self.design_matrix = np.hstack((self.design_matrix, regressors_array))
+            self.column_names += regressor_labels
 
     def build_design_matrix(self) -> pd.DataFrame:
         assert (
