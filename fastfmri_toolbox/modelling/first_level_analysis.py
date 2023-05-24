@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Union, List, Dict, Tuple
+from typing import Union, List, Dict, Tuple, Optional
 import itertools
 
 import numpy as np
@@ -34,6 +34,7 @@ class FirstLevelAnalysis:
         design_matrix: pd.DataFrame,
         time_window: Tuple[float, float],
         search_frequencies: List[float],
+        TR: Optional[float] = None,
     ):
         # Set-up
         self.derivatives_dir = Path(derivatives_dir)
@@ -41,10 +42,12 @@ class FirstLevelAnalysis:
         self.mask_path = Path(mask_path).resolve()
         self._get_path_info()
         self._make_directory_tree()
-
-        self.TR: float = float(nib.load(self.bold_path).header.get_zooms()[-1])
         self.design_matrix = design_matrix
         self.search_frequencies = search_frequencies
+        if TR is None:
+            self.TR: float = float(nib.load(self.bold_path).header.get_zooms()[-1])
+        else:
+            self.TR = TR
         self.window_indices = self._get_time_indices(time_window)
 
         # Check columns exist in input design matrix
