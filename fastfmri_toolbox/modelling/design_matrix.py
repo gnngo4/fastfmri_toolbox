@@ -425,13 +425,20 @@ class DesignMatrix:
             self.design_matrix, index=self.time_points, columns=self.column_names
         )
 
-    def plot_design_matrix(self, figsize=(4, 8)):
+    def plot_design_matrix(self, figsize=(4, 8), show_plot=True):
         from nilearn.plotting import plot_design_matrix
 
         fig, ax = plt.subplots(figsize=figsize)
 
         ax = plot_design_matrix(self.build_design_matrix(), ax=ax)
         ax.set_ylabel("scan volume")
+
+        if show_plot:
+            plt.show()
+        else:
+            plt.close()
+
+        return fig
 
     def get_time_indices(self, time_window: Tuple[float, float]) -> Tuple[int, int]:
         import math
