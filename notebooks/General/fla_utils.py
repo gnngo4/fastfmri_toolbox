@@ -24,6 +24,60 @@ from fastfmri_toolbox.modelling.design_matrix import (
 from fastfmri_toolbox.modelling.first_level_analysis import FirstLevelAnalysis
 from fastfmri_toolbox.visualize.base import PlotSlices
 
+"""
+Processing functions
+"""
+
+
+def create_temp_file(suffix):
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as temp_file:
+        return temp_file.name
+
+
+def search(base_dir, wildcard):
+    search_path = Path(base_dir) / wildcard
+    files = glob.glob(str(search_path))
+
+    if not files:
+        raise FileNotFoundError(f"No files were found in: {search_path}")
+
+    return files
+
+
+def convert_niftis_to_ciftis(root_directory, template_cifti, TR):
+    file_pattern = "**/*.nii.gz"
+    matching_files = glob.glob(
+        os.path.join(root_directory, file_pattern), recursive=True
+    )
+
+    for nifti in matching_files:
+        nifti_path = Path(nifti)
+        output_file = (
+            Path(nifti.replace(".nii.gz", ".dtseries.nii"))
+            if nifti.endswith("bold.nii.gz")
+            else Path(nifti.replace(".nii.gz", ".dscalar.nii"))
+        )
+
+        cmd = [
+            "wb_command",
+            "-cifti-convert",
+            "-from-nifti",
+            str(nifti_path),
+            str(template_cifti),
+            str(output_file),
+        ]
+
+        if nifti.endswith("bold.nii.gz"):
+            cmd.extend(["-reset-timepoints", str(TR), "0"])
+        else:
+            cmd.extend(["-reset-scalars"])
+
+        try:
+            subprocess.run(cmd, check=True)
+            os.remove(nifti)
+        except subprocess.CalledProcessError as e:
+            print(f"Error converting {nifti}: {e}")
+
 
 """
 Path loader - automatically searches and grabs paths required
@@ -38,7 +92,6 @@ class PathLoader:
         self.ses_id = ses_id
         self.task_id = task_id
         self.run_id = run_id
-        # Paths
         self.bold_nifti = Path(
             self._search(
                 self._get_func_dir(),
@@ -97,61 +150,6 @@ class PathLoader:
             )
 
         return files[0]
-
-
-"""
-Processing functions
-"""
-
-
-def create_temp_file(suffix):
-    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as temp_file:
-        return temp_file.name
-
-
-def search(base_dir, wildcard):
-    search_path = Path(base_dir) / wildcard
-    files = glob.glob(str(search_path))
-
-    if not files:
-        raise FileNotFoundError(f"No files were found in: {search_path}")
-
-    return files
-
-
-def convert_niftis_to_ciftis(root_directory, template_cifti, TR):
-    file_pattern = "**/*.nii.gz"
-    matching_files = glob.glob(
-        os.path.join(root_directory, file_pattern), recursive=True
-    )
-
-    for nifti in matching_files:
-        nifti_path = Path(nifti)
-        output_file = (
-            Path(nifti.replace(".nii.gz", ".dtseries.nii"))
-            if nifti.endswith("bold.nii.gz")
-            else Path(nifti.replace(".nii.gz", ".dscalar.nii"))
-        )
-
-        cmd = [
-            "wb_command",
-            "-cifti-convert",
-            "-from-nifti",
-            str(nifti_path),
-            str(template_cifti),
-            str(output_file),
-        ]
-
-        if nifti.endswith("bold.nii.gz"):
-            cmd.extend(["-reset-timepoints", str(TR), "0"])
-        else:
-            cmd.extend(["-reset-scalars"])
-
-        try:
-            subprocess.run(cmd, check=True)
-            os.remove(nifti)
-        except subprocess.CalledProcessError as e:
-            print(f"Error converting {nifti}: {e}")
 
 
 REGRESSOR_COMBINATIONS = {
