@@ -11,9 +11,8 @@ from nilearn.glm.first_level import FirstLevelModel
 REQUIRED_KEYS = ["sub", "ses", "task", "run"]
 DIRECTORY_TREE_NAMES = ["GLM"]
 PATH_STEMS = {
-    "predicted": "predicted_bold.nii.gz",
-    "residual": "residual_bold.nii.gz",
-    "windowed": "windowed_bold.nii.gz",
+    "windowed": "desc-windowed_bold.nii.gz",
+    "denoised": "desc-denoised_bold.nii.gz",
 }
 FREQUENCY_GLM_BASIS = [
     "sine",
@@ -44,6 +43,7 @@ class FirstLevelAnalysis:
         self._make_directory_tree()
         self.design_matrix = design_matrix
         self.search_frequencies = search_frequencies
+        self.bids_base_str = f"sub-{self.bids_info['sub']}_ses-{self.bids_info['ses']}_task-{self.bids_info['task']}_run-{self.bids_info['run']}"
         if TR is None:
             self.TR: float = float(nib.load(self.bold_path).header.get_zooms()[-1])
         else:
@@ -56,8 +56,7 @@ class FirstLevelAnalysis:
     def run_frequency_glm(
         self,
         save_windowed_bold: bool = False,
-        save_predicted: bool = False,
-        save_residual: bool = False,
+        save_denoised_bold: bool = False,
         save_additional_single_contrasts: Union[str, List[str], None] = None,
     ) -> None:
         self.save_single_contrast_list = self._get_single_contrast_list(
@@ -65,7 +64,7 @@ class FirstLevelAnalysis:
         )
 
         store_contrasts, store_contrast_results = False, {}
-        if save_predicted or save_residual:
+        if save_denoised_bold:
             store_contrasts = True
 
         # Instantiate FirstLevelModel object
@@ -81,8 +80,9 @@ class FirstLevelAnalysis:
         if save_windowed_bold:
             nib.save(
                 windowed_bold_img,
-                f"{self.directory_tree['GLM']}/{PATH_STEMS['windowed']}",
+                f"{self.directory_tree['GLM']}/{self.bids_base_str}_{PATH_STEMS['windowed']}",
             )
+            
 
         # Fit
         flm.fit(windowed_bold_img, design_matrices=self.design_matrix)
@@ -100,23 +100,23 @@ class FirstLevelAnalysis:
             if any([i in regressor_label for i in self.save_single_contrast_list]):
                 for k, v in single_contrast_results.items():
                     nib.save(
-                        v, f"{self.directory_tree['GLM']}/{regressor_label}_{k}.nii.gz"
+                        v, f"{self.directory_tree['GLM']}/{self.bids_base_str}_{regressor_label}_{k}.nii.gz"
                     )
 
         # Compute phaseshift between sine and cosine fits
         for f in self.search_frequencies:
             B = nib.load(
-                f"{self.directory_tree['GLM']}/basis-cosine_f-{f}_effect_size.nii.gz"
+                f"{self.directory_tree['GLM']}/{self.bids_base_str}_basis-cosine_f-{f}_effect_size.nii.gz"
             )
             A = nib.load(
-                f"{self.directory_tree['GLM']}/basis-sine_f-{f}_effect_size.nii.gz"
+                f"{self.directory_tree['GLM']}/{self.bids_base_str}_basis-sine_f-{f}_effect_size.nii.gz"
             )
             phi = np.arctan2(B.get_fdata(), A.get_fdata())
             phi = (phi + (2 * np.pi)) % (2 * np.pi)  # Force all values between [0,2pi]
             phi = 2 * np.pi - phi  # Convert phase delay wrt to a sine wave
             phi_img = nib.Nifti1Image(phi, affine=A.affine, header=A.header)
             nib.save(
-                phi_img, f"{self.directory_tree['GLM']}/frequency-{f}_phasedelay.nii.gz"
+                phi_img, f"{self.directory_tree['GLM']}/{self.bids_base_str}_frequency-{f}_phasedelay.nii.gz"
             )
 
         # Compute F-statistic contrast for each search frequency
@@ -132,21 +132,17 @@ class FirstLevelAnalysis:
             F_contrast_results = flm.compute_contrast(F_contrast, output_type="all")
             # Save all outputs
             for k, v in F_contrast_results.items():
-                nib.save(v, f"{self.directory_tree['GLM']}/frequency-{f}_{k}.nii.gz")
+                nib.save(v, f"{self.directory_tree['GLM']}/{self.bids_base_str}_frequency-{f}_{k}.nii.gz")
 
         if store_contrasts:
-            for ix, regressor_label in enumerate(single_contrasts.keys()):
-                if ix == 0:
-                    predicted_data = (
-                        store_contrast_results[regressor_label][
-                            "effect_size"
-                        ].get_fdata()[:, :, :, np.newaxis]
-                        * self.design_matrix[regressor_label].values[
-                            np.newaxis, np.newaxis, np.newaxis, :
-                        ]
-                    )
+            denoised_data = windowed_bold_img.get_fdata()
+            for regressor_label in single_contrasts.keys():
+                if regressor_label.startswith('basis-sine_f') or regressor_label.startswith('basis-cosine_f'):
+                    #print(f"[DENOISING] Skipping regressor, {regressor_label}.")
+                    continue
                 else:
-                    predicted_data += (
+                    #print(f"[DENOISING] Removing regressor, {regressor_label}.")
+                    denoised_data -= (
                         store_contrast_results[regressor_label][
                             "effect_size"
                         ].get_fdata()[:, :, :, np.newaxis]
@@ -155,30 +151,15 @@ class FirstLevelAnalysis:
                         ]
                     )
 
-            if save_predicted:
-                predicted_img = nib.Nifti1Image(
-                    predicted_data,
+            if save_denoised_bold:
+                denoised_img = nib.Nifti1Image(
+                    denoised_data,
                     affine=windowed_bold_img.affine,
                     header=windowed_bold_img.header,
                 )
                 nib.save(
-                    predicted_img,
-                    f"{self.directory_tree['GLM']}/{PATH_STEMS['predicted']}",
-                )
-
-            if save_residual:
-                residual_data = (
-                    windowed_bold_img.get_fdata()
-                    * nib.load(self.mask_path).get_fdata()[:, :, :, np.newaxis]
-                ) - predicted_data
-                residual_img = nib.Nifti1Image(
-                    residual_data,
-                    affine=windowed_bold_img.affine,
-                    header=windowed_bold_img.header,
-                )
-                nib.save(
-                    residual_img,
-                    f"{self.directory_tree['GLM']}/{PATH_STEMS['residual']}",
+                    denoised_img,
+                    f"{self.directory_tree['GLM']}/{self.bids_base_str}_{PATH_STEMS['denoised']}",
                 )
 
     def _get_single_contrast_list(
