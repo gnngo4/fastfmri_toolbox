@@ -2,6 +2,7 @@ from typing import Optional
 from typing import List, Tuple
 import typer
 import time
+import fcntl
 
 from pathlib import Path
 from fla_utils import (
@@ -55,9 +56,36 @@ def run_level(
         _out_dir=f"{out_dir}/{str(experiment_ix).zfill(2)}_experiment-{dm_type}"
         
         # Create figures directory
-        figures_dir = Path(f"{_out_dir}/figures")
+        lock_file = Path(f"/scratch/{experiment_id}_{mri_id}_truncate-{time_window[0]}-{time_window[1]}_experiment-{dm_type}.lock") # Define the lock file path
+        # try to acquire lock
+        with open(lock_file, "w") as lock:
+            while True:
+                try:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    time.sleep(.1)
+            figures_dir = Path(f"{_out_dir}/figures") # Create directory
+            if not figures_dir.exists():
+                try:
+                    figures_dir.mkdir(parents=True)
+                except FileExistsError:
+                    pass
+                except Exception as e:
+                    print(f"Error creating figures directory: {e}")
+            fcntl.flock(lock, fcntl.LOCK_UN)
+
         if not figures_dir.exists():
-            figures_dir.mkdir(parents=True)
+            try:
+                lock_file = figures_dir / ".lock"
+                with open(lock_file, "w") as f:
+                    fcntl.flock(f, fcntl.LOCK_EX)  # Acquire an exclusive lock
+                    if not figures_dir.exists():
+                        figures_dir.mkdir(parents=True)
+                    fcntl.flock(f, fcntl.LOCK_UN)  # Release the lock
+            except Exception as e:
+                print(f"Error creating figures directory: {e}")
+
         
         # Skip if processed already
         processed_flag = Path(f"{_out_dir}/sub-{sub_id}/ses-{ses_id}/task-{task_id}/run-{run_id}/GLM").exists()

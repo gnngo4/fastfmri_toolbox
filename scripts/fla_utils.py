@@ -44,10 +44,18 @@ def search(base_dir, wildcard):
     return files
 
 
-def convert_niftis_to_ciftis(root_directory, template_cifti, TR):
-    file_pattern = "**/*.nii.gz"
+def convert_niftis_to_ciftis(
+    sub_id,
+    ses_id,
+    task_id,
+    run_id,
+    root_directory, 
+    template_cifti, 
+    TR
+):
+    file_pattern = f"sub-{sub_id}/ses-{ses_id}/task-{task_id}/run-{run_id}/GLM/*.nii.gz"
     matching_files = glob.glob(
-        os.path.join(root_directory, file_pattern), recursive=True
+        os.path.join(root_directory, file_pattern), recursive=False
     )
 
     for nifti in matching_files:
@@ -73,11 +81,13 @@ def convert_niftis_to_ciftis(root_directory, template_cifti, TR):
             cmd.extend(["-reset-scalars"])
 
         try:
-            subprocess.run(cmd, check=True)
+            process = subprocess.Popen(cmd)  # Run the subprocess asynchronously
+            process.communicate()  # Wait for subprocess to finish
             os.remove(nifti)
         except subprocess.CalledProcessError as e:
             print(f"Error converting {nifti}: {e}")
-
+        except OSError as e:
+            print(f"Error removing {nifti}: {e}")
 
 """
 Path loader - automatically searches and grabs paths required
@@ -324,7 +334,13 @@ def run_glm(
 
     if image_type == "CIFTI":
         convert_niftis_to_ciftis(
-            f"{out_dir}", path_loader.bold_dtseries, TR
+            path_loader.sub_id,
+            path_loader.ses_id,
+            path_loader.task_id,
+            path_loader.run_id,
+            f"{out_dir}", 
+            path_loader.bold_dtseries, 
+            TR,
         )
         for f in temp_files:
             os.remove(f)
