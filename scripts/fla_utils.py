@@ -278,20 +278,40 @@ def run_glm(
     image_type,
     design_matrix,
     out_dir,
+    smooth_mm,
+    surf_left="/scratch/surfaces/S1200.L.midthickness_MSMAll.32k_fs_LR.surf.gii", 
+    surf_right="/scratch/surfaces/S1200.R.midthickness_MSMAll.32k_fs_LR.surf.gii",
 ):
     if image_type == "CIFTI":
         temp_files = []
         workflows = []
 
         # Create pseudo-nifti from cifti
-        tmp_bold_path = create_temp_file(".nii.gz")
-        bids_tmp_bold_path = Path("/tmp") / Path(
-            path_loader.bold_nifti.stem.replace("nii", tmp_bold_path.split("/")[-1])
-        )
-        _cmd = f"wb_command -cifti-convert -to-nifti {path_loader.bold_dtseries} {bids_tmp_bold_path}"
-        workflows.append(_cmd)
-        temp_files.append(tmp_bold_path)
-        temp_files.append(bids_tmp_bold_path)
+        if smooth_mm > 0:
+            for _surf in [surf_left, surf_right]:
+                assert Path(_surf).exists(), f"{_surf} does not exist."
+            tmp_bold_dtseries_path = create_temp_file(".dtseries.nii")
+            _cmd = f"wb_command -cifti-smoothing {path_loader.bold_dtseries} {smooth_mm} {smooth_mm} COLUMN {tmp_bold_dtseries_path} -fwhm -left-surface {surf_left} -right-surface {surf_right}"
+            workflows.append(_cmd)
+            temp_files.append(tmp_bold_dtseries_path)
+
+            tmp_bold_path = create_temp_file(".nii.gz")
+            bids_tmp_bold_path = Path("/tmp") / Path(
+                path_loader.bold_nifti.stem.replace("nii", tmp_bold_path.split("/")[-1])
+            )
+            _cmd = f"wb_command -cifti-convert -to-nifti {tmp_bold_dtseries_path} {bids_tmp_bold_path}"
+            workflows.append(_cmd)
+            temp_files.append(tmp_bold_path)
+            temp_files.append(bids_tmp_bold_path)
+        else:
+            tmp_bold_path = create_temp_file(".nii.gz")
+            bids_tmp_bold_path = Path("/tmp") / Path(
+                path_loader.bold_nifti.stem.replace("nii", tmp_bold_path.split("/")[-1])
+            )
+            _cmd = f"wb_command -cifti-convert -to-nifti {path_loader.bold_dtseries} {bids_tmp_bold_path}"
+            workflows.append(_cmd)
+            temp_files.append(tmp_bold_path)
+            temp_files.append(bids_tmp_bold_path)
 
         # Create pseudo-nifti brainmask
         mask_path = create_temp_file(".nii.gz")

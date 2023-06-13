@@ -27,7 +27,8 @@ def run_level(
     task_id: str,
     run_id: str,
     search_frequencies: List[float],
-    time_window: Tuple[float, float]
+    time_window: Tuple[float, float],
+    smooth_mm: int = 0,
 ):
 
     # Logging
@@ -41,7 +42,8 @@ def run_level(
         f"task ID: {task_id}\n",
         f"run ID: {run_id}\n",
         f"search frequencies: {search_frequencies} Hz\n",
-        f"time window: {time_window} secs"
+        f"time window: {time_window} secs\n",
+        f"smooth (mm): {smooth_mm}"
     )
 
     # Loop over various design matrix schemes
@@ -120,7 +122,8 @@ def run_level(
             search_frequencies, 
             image_type, 
             design_matrix, 
-            _out_dir
+            _out_dir,
+            smooth_mm,
         )
 
         # Calculate the elapsed time in seconds
