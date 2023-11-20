@@ -1,5 +1,5 @@
 from typing import Optional
-from typing import List, Tuple
+from typing import List, Tuple, Union, Literal
 import typer
 import time
 import fcntl
@@ -8,7 +8,6 @@ from pathlib import Path
 from fla_utils import (
     search,
     PathLoader,
-    REGRESSOR_COMBINATIONS,
     build_design_matrix,
     run_glm,
     extract_glm_metrics,
@@ -29,7 +28,12 @@ def run_level(
     search_frequencies: List[float],
     time_window: Tuple[float, float],
     smooth_mm: int = 0,
+    denoise_only: bool = False,
+    nordic_dir: str = 'None',
+    image_type: str = 'CIFTI',
 ):
+
+    assert image_type in ["NIFTI", "CIFTI"]
 
     # Logging
     print(
@@ -43,8 +47,17 @@ def run_level(
         f"run ID: {run_id}\n",
         f"search frequencies: {search_frequencies} Hz\n",
         f"time window: {time_window} secs\n",
-        f"smooth (mm): {smooth_mm}"
+        f"smooth (mm): {smooth_mm}\n",
+        f"denoise_only: {denoise_only}\n",
+        f"nordic_dir: {nordic_dir}\n",
+        f"image_type: {image_type}\n",
     )
+
+    if denoise_only:
+        search_frequencies = [] # Force empty
+        from fla_utils import REGRESSOR_COMBINATIONS_AGGR as REGRESSOR_COMBINATIONS
+    else:
+        from fla_utils import REGRESSOR_COMBINATIONS_SOFT as REGRESSOR_COMBINATIONS
 
     # Loop over various design matrix schemes
     for experiment_ix, dm_type in enumerate(REGRESSOR_COMBINATIONS.keys()):
@@ -101,7 +114,8 @@ def run_level(
             sub_id, 
             ses_id,
             task_id,
-            run_id
+            run_id,
+            nordic_dir = nordic_dir
         )
 
         # Build and save design matrix
@@ -110,12 +124,15 @@ def run_level(
             time_window,
             search_frequencies,
             dm_type,
-            show_flag = False
+            show_flag = False,
+            denoise_only = denoise_only,
+            nordic_dir = nordic_dir
         )
+        print(f"DEBUGGING: {design_matrix.shape}")
         dm_fig.savefig(f"{figures_dir}/sub-{path_loader.sub_id}_ses-{path_loader.ses_id}_task-{path_loader.task_id}_run-{path_loader.run_id}_DM.png")
 
         # Fit and run frequency-based GLM on NIFTI and CIFTI data
-        image_type = 'CIFTI'
+        #image_type = 'CIFTI'
         run_glm(
             path_loader,
             time_window, 

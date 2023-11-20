@@ -34,6 +34,7 @@ class FirstLevelAnalysis:
         time_window: Tuple[float, float],
         search_frequencies: List[float],
         TR: Optional[float] = None,
+        data_windowed = False,
     ):
         # Set-up
         self.derivatives_dir = Path(derivatives_dir)
@@ -48,7 +49,9 @@ class FirstLevelAnalysis:
             self.TR: float = float(nib.load(self.bold_path).header.get_zooms()[-1])
         else:
             self.TR = TR
-        self.window_indices = self._get_time_indices(time_window)
+        self.data_windowed = data_windowed
+        if not self.data_windowed:
+            self.window_indices = self._get_time_indices(time_window)
 
         # Check columns exist in input design matrix
         self._design_matrix_validator()
@@ -76,12 +79,16 @@ class FirstLevelAnalysis:
         )
 
         # Window the inputted `bold_path` using the `window_indices`
-        windowed_bold_img = self._window_image()
-        if save_windowed_bold:
-            nib.save(
-                windowed_bold_img,
-                f"{self.directory_tree['GLM']}/{self.bids_base_str}_{PATH_STEMS['windowed']}",
-            )
+        # If the bold data is already windowed, then do not truncate further
+        if self.data_windowed:
+            windowed_bold_img = nib.load(self.bold_path)
+        else:
+            windowed_bold_img = self._window_image()
+            if save_windowed_bold:
+                nib.save(
+                    windowed_bold_img,
+                    f"{self.directory_tree['GLM']}/{self.bids_base_str}_{PATH_STEMS['windowed']}",
+                )
             
 
         # Fit
@@ -112,8 +119,16 @@ class FirstLevelAnalysis:
                 f"{self.directory_tree['GLM']}/{self.bids_base_str}_basis-sine_f-{f}_effect_size.nii.gz"
             )
             phi = np.arctan2(B.get_fdata(), A.get_fdata())
-            phi = (phi + (2 * np.pi)) % (2 * np.pi)  # Force all values between [0,2pi]
-            phi = 2 * np.pi - phi  # Convert phase delay wrt to a sine wave
+            # Force all values from [-pi, pi] to [0, 2pi]
+            phi = self._normalize_angle(phi)
+            # Currently, phi shows the phase-shift of a sine wave to the left [EQN: y = sin(theta + phi)]
+            # Convert phi to indicate the phase-shift of a sine wave to the right [EQN: y = sin(theta - phi)]
+            # This is done by subtracting phi from 2pi...
+            phi = (-1 * phi) + (2 * np.pi)
+            # Convert to seconds: for a given `f`, `phi` indicates the time delay of a sine wave, 
+            # Note: this time delay does not account for stimulus offsets 
+            phi /= (2 * np.pi * f)
+            # Save
             phi_img = nib.Nifti1Image(phi, affine=A.affine, header=A.header)
             nib.save(
                 phi_img, f"{self.directory_tree['GLM']}/{self.bids_base_str}_frequency-{f}_phasedelay.nii.gz"
@@ -137,15 +152,13 @@ class FirstLevelAnalysis:
         if store_contrasts:
             denoised_data = windowed_bold_img.get_fdata()
             for regressor_label in single_contrasts.keys():
-                if regressor_label.startswith('basis-sine_f') or regressor_label.startswith('basis-cosine_f'):
+                if regressor_label.startswith('basis-sine_f') or regressor_label.startswith('basis-cosine_f') or regressor_label == "constant":
                     #print(f"[DENOISING] Skipping regressor, {regressor_label}.")
                     continue
                 else:
                     #print(f"[DENOISING] Removing regressor, {regressor_label}.")
                     denoised_data -= (
-                        store_contrast_results[regressor_label][
-                            "effect_size"
-                        ].get_fdata()[:, :, :, np.newaxis]
+                        store_contrast_results[regressor_label]["effect_size"].get_fdata()
                         * self.design_matrix[regressor_label].values[
                             np.newaxis, np.newaxis, np.newaxis, :
                         ]
@@ -203,12 +216,28 @@ class FirstLevelAnalysis:
         self.directory_tree = dict(zip(DIRECTORY_TREE_NAMES, _list))
 
     def _get_time_indices(self, time_window: Tuple[float, float]) -> Tuple[int, int]:
-        import math
 
-        idx_1 = int(math.floor(time_window[0] / self.TR))
-        idx_2 = int(math.floor(time_window[1] / self.TR))
+        import math
+        
+        scaled_TR, int_scaling_factor = self._get_int_scaling_factor(self.TR)
+        time_window = tuple(value * int_scaling_factor for value in time_window)
+
+        idx_1 = int(math.floor(time_window[0] / scaled_TR))
+        idx_2 = int(math.floor(time_window[1] / scaled_TR))
 
         return (idx_1, idx_2)
+    
+    def _get_int_scaling_factor(self, x: float, tolerance: float = 0.0001) -> Tuple[int, int]:
+
+        if x == int(x):
+            return 1  # No decimals needed, it's already an integer
+        
+        decimals = 0
+        while x != int(x):
+            x *= 10
+            decimals += 1
+            if abs(x-int(x)) <= tolerance:
+                return int(round(x)), 10**decimals
 
     def _design_matrix_validator(self) -> None:
         for f, _basis in itertools.product(
@@ -236,3 +265,7 @@ class FirstLevelAnalysis:
         return nib.Nifti1Image(
             bold_data, affine=bold_img.affine, header=bold_img.header
         )
+
+    def _normalize_angle(self, theta: np.ndarray) -> np.ndarray:
+        
+        return theta % ( 2 * np.pi )

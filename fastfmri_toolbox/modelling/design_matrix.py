@@ -385,7 +385,7 @@ class DesignMatrix:
         self.TR = self._get_TR(bold_path, TR)
         self.search_frequencies = search_frequencies
         self.high_pass_threshold = high_pass_threshold
-        self.time_points = self._get_time_points(self.TR, time_window)
+        self.time_points = self._get_time_points(time_window)
         self.n_tps = len(self.time_points)
         assert np.all(
             self.time_points[:-1] <= self.time_points[1:]
@@ -416,14 +416,20 @@ class DesignMatrix:
             self.design_matrix = np.hstack((self.design_matrix, regressors_array))
             self.column_names += regressor_labels
 
-    def build_design_matrix(self) -> pd.DataFrame:
+    def build_design_matrix(self, enforce_demean: bool = False) -> pd.DataFrame:
         assert (
             self.design_matrix.shape[-1] > 0
         ), f"No regressors have been added to the design matrix yet"
 
-        return pd.DataFrame(
+        df = pd.DataFrame(
             self.design_matrix, index=self.time_points, columns=self.column_names
         )
+
+        if enforce_demean:
+            demean_column_labels = df.columns[df.columns != "constant"]
+            df[demean_column_labels] = df[demean_column_labels].apply(lambda x: x - x.mean())
+        
+        return df
 
     def plot_design_matrix(self, figsize=(4, 8), show_plot=True):
         from nilearn.plotting import plot_design_matrix
@@ -441,10 +447,14 @@ class DesignMatrix:
         return fig
 
     def get_time_indices(self, time_window: Tuple[float, float]) -> Tuple[int, int]:
+
         import math
 
-        idx_1 = int(math.floor(time_window[0] / self.TR))
-        idx_2 = int(math.floor(time_window[1] / self.TR))
+        scaled_TR, int_scaling_factor = self._get_int_scaling_factor(self.TR)
+        time_window = tuple(value * int_scaling_factor for value in time_window)
+
+        idx_1 = int(math.floor(time_window[0] / scaled_TR))
+        idx_2 = int(math.floor(time_window[1] / scaled_TR))
 
         return (idx_1, idx_2)
 
@@ -466,16 +476,33 @@ class DesignMatrix:
             raise ValueError("Error: either `bold_path` or `TR` must be provided.")
 
     def _get_time_points(
-        self, TR: float, time_window: Tuple[float, float]
+        self, time_window: Tuple[float, float]
     ) -> np.ndarray:
         import math
 
-        tp_1 = math.floor(time_window[0] / self.TR) * self.TR
-        tp_2 = math.floor(time_window[1] / self.TR) * self.TR
-        time_points = np.arange(tp_1, tp_2 + (self.TR / 10), self.TR)
+        scaled_TR, int_scaling_factor = self._get_int_scaling_factor(self.TR)
+        time_window = tuple(value * int_scaling_factor for value in time_window)
+
+        tp_1 = math.floor(time_window[0] / scaled_TR) * scaled_TR
+        tp_2 = math.floor(time_window[1] / scaled_TR) * scaled_TR
+        time_points = np.linspace(tp_1, tp_2, int((tp_2 - tp_1) / scaled_TR) + 1)
+        time_points /= int_scaling_factor
         time_points -= time_points[0]
+        # print(time_points, time_points.shape)
 
         return time_points
+
+    def _get_int_scaling_factor(self, x: float, tolerance: float = 0.0001) -> Tuple[int, int]:
+
+        if x == int(x):
+            return 1  # No decimals needed, it's already an integer
+        
+        decimals = 0
+        while x != int(x):
+            x *= 10
+            decimals += 1
+            if abs(x-int(x)) <= tolerance:
+                return int(round(x)), 10**decimals
 
     def _get_confounds(
         self,

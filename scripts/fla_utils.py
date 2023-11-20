@@ -24,6 +24,8 @@ from fastfmri_toolbox.modelling.design_matrix import (
 from fastfmri_toolbox.modelling.first_level_analysis import FirstLevelAnalysis
 from fastfmri_toolbox.visualize.base import PlotSlices
 
+PREPROC_DIR_TYPES = ["OSCPREP", "NORDIC"]
+
 """
 Processing functions
 """
@@ -96,33 +98,72 @@ for first level analysis of oscprep tools.
 
 
 class PathLoader:
-    def __init__(self, oscprep_dir, sub_id, ses_id, task_id, run_id):
+    def __init__(
+        self, 
+        oscprep_dir, 
+        sub_id, 
+        ses_id, 
+        task_id, 
+        run_id, 
+        nordic_dir = 'None',
+    ):
         self.oscprep_dir = oscprep_dir
         self.sub_id = sub_id
         self.ses_id = ses_id
         self.task_id = task_id
         self.run_id = run_id
-        self.bold_nifti = Path(
-            self._search(
-                self._get_func_dir(),
-                f"sub-{sub_id}_ses-{ses_id}_task-{task_id}_*_run-{run_id}*desc-preproc_bold.nii.gz",
+        
+        if nordic_dir == 'None':
+            self.preproc_dir_type = "OSCPREP"
+        else:
+            self.preproc_dir_type = "NORDIC"
+            self.nordic_dir = nordic_dir
+
+        if self.preproc_dir_type == 'OSCPREP':
+            self.bold_nifti = Path(
+                self._search(
+                    self._get_func_dir_oscprep(),
+                    f"sub-{sub_id}_ses-{ses_id}_task-{task_id}_*_run-{run_id}*desc-preproc_bold.nii.gz",
+                )
             )
-        )
-        self.bold_dtseries = Path(
-            self._search(
-                self._get_func_dir(),
-                f"sub-{sub_id}_ses-{ses_id}_task-{task_id}_*_run-{run_id}*desc-preproc_bold.dtseries.nii",
+            self.bold_dtseries = Path(
+                self._search(
+                    self._get_func_dir_oscprep(),
+                    f"sub-{sub_id}_ses-{ses_id}_task-{task_id}_*_run-{run_id}*desc-preproc_bold.dtseries.nii",
+                )
             )
-        )
+        elif self.preproc_dir_type == 'NORDIC':
+            self.bold_nifti_oscprep = Path(
+                self._search(
+                    self._get_func_dir_oscprep(),
+                    f"sub-{sub_id}_ses-{ses_id}_task-{task_id}_*_run-{run_id}*desc-preproc_bold.nii.gz",
+                )
+            )
+            self.bold_nifti = Path(
+                self._search(
+                    self._get_func_dir_nordic(),
+                    f"sub-{sub_id}_ses-{ses_id}_task-{task_id}_*_run-{run_id}*desc-preproc_bold.nii.gz",
+                )
+            )
+            print("WARNING: NORDIC directory does not output a dtseries.\nUsing dtseries from oscprep instead.")
+            self.bold_dtseries = Path(
+                self._search(
+                    self._get_func_dir_oscprep(),
+                    f"sub-{sub_id}_ses-{ses_id}_task-{task_id}_*_run-{run_id}*desc-preproc_bold.dtseries.nii",
+                )
+            )
+        else:
+            assert self.preproc_dir_type in PREPROC_DIR_TYPES
+
         self.bold_reference = Path(
             self._search(
-                self._get_func_dir(),
+                self._get_func_dir_oscprep(),
                 f"sub-{sub_id}_ses-{ses_id}_task-{task_id}_*_run-{run_id}*_boldref.nii.gz",
             )
         )
         self.bold_brainmask = Path(
             self._search(
-                self._get_func_dir(),
+                self._get_func_dir_oscprep(),
                 f"sub-{sub_id}_ses-{ses_id}_task-{task_id}_*_run-{run_id}*_brainmask.nii.gz",
             )
         )
@@ -140,9 +181,14 @@ class PathLoader:
             )
         )
 
-    def _get_func_dir(self):
+    def _get_func_dir_oscprep(self):
         return (
             f"{self.oscprep_dir}/bold_preproc/sub-{self.sub_id}/ses-{self.ses_id}/func"
+        )
+
+    def _get_func_dir_nordic(self):
+        return (
+            f"{self.nordic_dir}/sub-{self.sub_id}/ses-{self.ses_id}/func"
         )
 
     def _get_smriprep_dir(self):
@@ -161,7 +207,7 @@ class PathLoader:
 
         return files[0]
 
-
+"""
 REGRESSOR_COMBINATIONS = {
     "min": [FrequencyRegressors, DriftRegressors],
     "min+motion6": [FrequencyRegressors, DriftRegressors, MotionParameters],
@@ -198,6 +244,40 @@ REGRESSOR_COMBINATIONS = {
         ScrubbingRegressors,
     ],
 }
+"""
+
+REGRESSOR_COMBINATIONS_SOFT = {
+    "min+motion24+wmcsfmean": [
+        FrequencyRegressors,
+        DriftRegressors,
+        MotionParameters,
+        MeanSignalRegressors,
+    ],
+}
+"""
+"min+motion24+wmcsfcompcor+scrub": [
+    FrequencyRegressors,
+    DriftRegressors,
+    MotionParameters,
+    CompCorRegressors,
+    ScrubbingRegressors,
+],
+"""
+
+REGRESSOR_COMBINATIONS_AGGR = {
+    "min+motion24+wmcsfmean": [
+        DriftRegressors,
+        MotionParameters,
+        MeanSignalRegressors,
+    ],
+}
+"""
+    "min+motion24+wmcsfcompcor": [
+        DriftRegressors,
+        MotionParameters,
+        CompCorRegressors,
+    ],
+"""
 
 
 def build_design_matrix(
@@ -208,16 +288,32 @@ def build_design_matrix(
     show_flag=False,
     high_pass_threshold=0.01,
     add_constant=True,
+    denoise_only=False,
+    nordic_dir="None"
 ):
+
+    if denoise_only:
+        REGRESSOR_COMBINATIONS = REGRESSOR_COMBINATIONS_AGGR
+    else:
+        REGRESSOR_COMBINATIONS = REGRESSOR_COMBINATIONS_SOFT
+
     if dm_type not in REGRESSOR_COMBINATIONS:
         raise ValueError(f"{dm_type} is not a valid dm_type.")
 
-    dm = DesignMatrix(time_window, search_frequencies, bold_path=path_loader.bold_nifti)
+    if nordic_dir == "None":
+        dm = DesignMatrix(time_window, search_frequencies, bold_path=path_loader.bold_nifti)
+        print(f"[RUN DESIGN MATRIX] {path_loader.bold_nifti}")
+    else:
+        dm = DesignMatrix(time_window, search_frequencies, bold_path=path_loader.bold_nifti_oscprep)
+        print(f"[RUN DESIGN MATRIX] {path_loader.bold_nifti_oscprep}")
 
+    print(f"REGRESSOR INFO: {REGRESSOR_COMBINATIONS}")
     for regressor_class in REGRESSOR_COMBINATIONS[dm_type]:
         if regressor_class is FrequencyRegressors:
+            print("Adding frequency regressors.")
             dm.add_regressor(regressor_class(search_frequencies, dm.time_points))
         elif regressor_class is DriftRegressors:
+            print("Adding drift regressors.")
             dm.add_regressor(
                 regressor_class(
                     dm.time_points,
@@ -226,6 +322,7 @@ def build_design_matrix(
                 )
             )
         elif regressor_class is MotionParameters:
+            print("Adding motion regressors.")
             _mc_params = dm_type.split("motion")[1].split("+")[0]
             dm.add_regressor(
                 regressor_class(
@@ -234,7 +331,8 @@ def build_design_matrix(
                 )
             )
         elif regressor_class is MeanSignalRegressors:
-            if "wmcsf_mean" in dm_type:
+            if "wmcsfmean" in dm_type:
+                print("Adding mean WM and CSF regressors.")
                 for _regressor_type in ["WM", "CSF"]:
                     dm.add_regressor(
                         regressor_class(
@@ -244,7 +342,8 @@ def build_design_matrix(
                         )
                     )
         elif regressor_class is CompCorRegressors:
-            if "wmcsf_compcor" in dm_type:
+            if "wmcsfcompcor" in dm_type:
+                print("Adding compcor WM and CSF regressors.")
                 for _regressor_type in ["WM", "CSF"]:
                     dm.add_regressor(
                         regressor_class(
@@ -254,17 +353,18 @@ def build_design_matrix(
                         )
                     )
         elif regressor_class is ScrubbingRegressors:
+            print("Adding scrubbing regressors.")
             dm.add_regressor(
                 regressor_class(
                     dm.get_time_indices(time_window),
                     movement_param="FD",
-                    movement_threshold=0.15,
+                    movement_threshold=0.2,
                 )
             )
         else:
             raise ValueError(f"{str(regressor_class)} is not a valid regressor class.")
 
-    design_matrix = dm.build_design_matrix()
+    design_matrix = dm.build_design_matrix(enforce_demean=True)
     n_regressors = design_matrix.shape[-1]
     fig = dm.plot_design_matrix(show_plot=show_flag, figsize=((n_regressors / 2), 4))
 
@@ -335,6 +435,7 @@ def run_glm(
     TR = float(nib.load(path_loader.bold_nifti).header.get_zooms()[-1])
 
     # Set-up first-level analysis
+    print(f"[RUN FLA] {path_loader.bold_nifti}")
     fla = FirstLevelAnalysis(
         derivatives_dir=f"{out_dir}",
         bold_path=path_loader.bold_nifti
