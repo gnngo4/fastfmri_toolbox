@@ -12,10 +12,14 @@ import nibabel as nib
 import numpy as np
 import os
 import shutil
+import statsmodels.stats.multitest as sm
 
 import sys
 sys.path.append("/opt/app")
-from fastfmri_toolbox.modelling.design_matrix import DesignMatrix, FrequencyRegressors
+from fastfmri_toolbox.modelling.design_matrix import (
+    DesignMatrix, 
+    FrequencyRegressors, 
+)
 from fastfmri_toolbox.modelling.first_level_analysis import FirstLevelAnalysis
 from scripts.fla_utils import convert_niftis_to_ciftis
 
@@ -179,7 +183,7 @@ def run_fla(
         TR = TR,
         data_windowed = True,
     )
-    fla.run_frequency_glm()
+    fla.run_frequency_glm(save_frequency_snrs=False)
     convert_niftis_to_ciftis(
         sub_id, 
         ses_id, 
@@ -228,7 +232,7 @@ class analyze_bootstrap:
         # Assertions
         assert self.parent_fla_dir.exists(), f"{self.parent_fla_dir} does not exist."
         # Global var
-        self.MANDATORY_METRICS = ["z_score", "phase_delay"]
+        self.MANDATORY_METRICS = ["stat", "z_score", "phase_delay", "p_value"]
         self.z_increment = 0.5
         self.z_max = 10.1
 
@@ -249,22 +253,34 @@ class analyze_bootstrap:
         assert train_fla_dir.exists(), f"{train_fla_dir} does not exist."
         assert test_fla_dir.exists(), f"{test_fla_dir} does not exist."
         # Load
+        self._process_multiple_metrics(self.train_stat, train_fla_dir, train_run_id, iteration, "stat")
+        self._process_multiple_metrics(self.test_stat, test_fla_dir, test_run_id, iteration, "stat")
         self._process_multiple_metrics(self.train_z_scores, train_fla_dir, train_run_id, iteration, "z_score")
         self._process_multiple_metrics(self.test_z_scores, test_fla_dir, test_run_id, iteration, "z_score")
         self._process_multiple_metrics(self.train_phase_delays, train_fla_dir, train_run_id, iteration, "phase_delay")
         self._process_multiple_metrics(self.test_phase_delays, test_fla_dir, test_run_id, iteration, "phase_delay")
+        #self._process_multiple_metrics(self.train_pSNR, train_fla_dir, train_run_id, iteration, "pSNR")
+        #self._process_multiple_metrics(self.test_pSNR, test_fla_dir, test_run_id, iteration, "pSNR")
+        self._process_multiple_metrics(self.train_p_value, train_fla_dir, train_run_id, iteration, "p_value")
+        self._process_multiple_metrics(self.test_p_value, test_fla_dir, test_run_id, iteration, "p_value")
         self._process_tasklock_metric(train_average, test_average, iteration)
 
     def aggregate_metrics(self):
         for search_frequency in self.search_frequencies:
             # Mean & stdev
+            self._calculate_mean_std_metric(self.train_stat[search_frequency], "_stat.")
+            self._calculate_mean_std_metric(self.test_stat[search_frequency], "_stat.")
             self._calculate_mean_std_metric(self.train_z_scores[search_frequency], "_z_score.")
             self._calculate_mean_std_metric(self.test_z_scores[search_frequency], "_z_score.")
             self._calculate_mean_std_metric(self.train_phase_delays[search_frequency], "_phasedelay.")
             self._calculate_mean_std_metric(self.test_phase_delays[search_frequency], "_phasedelay.")
+            #self._calculate_mean_std_metric(self.train_pSNR[search_frequency], "_pSNR.")
+            #self._calculate_mean_std_metric(self.test_pSNR[search_frequency], "_pSNR.")
+            self._calculate_mean_std_metric(self.train_p_value[search_frequency], "_p_value.")
+            self._calculate_mean_std_metric(self.test_p_value[search_frequency], "_p_value.")
             # Overlap
-            self._calculate_overlap_z_score(self.train_z_scores[search_frequency], "_z_score.")
-            self._calculate_overlap_z_score(self.test_z_scores[search_frequency], "_z_score.")
+            self._calculate_activation_overlap(self.train_stat[search_frequency], self.train_p_value[search_frequency])
+            self._calculate_activation_overlap(self.test_stat[search_frequency], self.test_p_value[search_frequency])
         # Mean & stdev
         self._calculate_mean_std_metric(self.tasklock, "_tasklock.")
 
@@ -283,25 +299,44 @@ class analyze_bootstrap:
         stdev_img.header.matrix[0].number_of_series_points = 1
         nib.save(stdev_img, str(dtseries).replace(replace_str, f"_desc-std{replace_str}"))
 
-    def _calculate_overlap_z_score(self, dtseries, replace_str):
+    def _calculate_activation_overlap(
+        self, 
+        stat_dtseries, 
+        p_value_dtseries,
+    ):
         # Load img and data
-        img = nib.load(dtseries)
-        data = img.get_fdata()
-        n_iters, n_vertices = data.shape
-        # Loop over Z-threshold
-        for z_ix, z_thr in enumerate(np.arange(0, self.z_max, self.z_increment)):
-            z_gt_data = (data > z_thr).astype(int)
-            if z_ix == 0:
-                fractional_overlap = z_gt_data.sum(0, keepdims=True) / n_iters
+        stat_img = nib.load(stat_dtseries)
+        stat_data = stat_img.get_fdata()
+        pval_img = nib.load(p_value_dtseries)
+        pval_data = pval_img.get_fdata()
+        n_iters, _ = stat_data.shape
+        for i in range(n_iters):
+            _stat_data = stat_data[i,:]
+            _pval_data = pval_data[i,:]
+            _wholebrain_mask = _stat_data > 0
+            n_vertices = _wholebrain_mask.sum()
+            corrected_pvalue = np.zeros_like(_wholebrain_mask).astype(float)
+            qvalues = sm.multipletests(
+                _pval_data[_wholebrain_mask], method='fdr_bh'
+            )[1]
+            corrected_pvalue[_wholebrain_mask] = qvalues
+            _corrected_pvalue_mask = ( (corrected_pvalue < .05) * _wholebrain_mask ).astype(float)[np.newaxis,:]
+            _wholebrain_mask = _wholebrain_mask.astype(float)[np.newaxis,:]
+            if i == 0:
+                corrected_pvalue_mask = _corrected_pvalue_mask
+                wholebrain_mask = _wholebrain_mask
             else:
-                fractional_overlap = np.concatenate(
-                    (fractional_overlap, z_gt_data.sum(0, keepdims=True) / n_iters),
-                    axis = 0
-                )
-        # save fractional overlap - iterated from [0, self.z_max] and incremented by self.z_increment
-        fractional_overlap_img = nib.Cifti2Image(fractional_overlap, header=img.header)
-        fractional_overlap_img.header.matrix[0].number_of_series_points = fractional_overlap.shape[0]
-        nib.save(fractional_overlap_img, str(dtseries).replace("_z_score.", "_desc-overlap_z_score."))
+                corrected_pvalue_mask = np.concatenate((corrected_pvalue_mask, _corrected_pvalue_mask), axis=0)
+                wholebrain_mask = np.concatenate((wholebrain_mask, _wholebrain_mask), axis=0)
+        mean_corrected_pvalue_mask_img = nib.Cifti2Image(corrected_pvalue_mask.mean(axis=0)[np.newaxis,:], header=stat_img.header)
+        mean_corrected_pvalue_mask_img.header.matrix[0].number_of_series_points = 1
+        nib.save(mean_corrected_pvalue_mask_img, str(stat_dtseries).replace("_stat.", "_desc-overlap_activations."))
+        corrected_pvalue_mask_img = nib.Cifti2Image(corrected_pvalue_mask, header=stat_img.header)
+        corrected_pvalue_mask_img.header.matrix[0].number_of_series_points = corrected_pvalue_mask.shape[0]
+        nib.save(corrected_pvalue_mask_img, str(stat_dtseries).replace("_stat.", "_activations."))
+        wholebrain_mask_img = nib.Cifti2Image(wholebrain_mask, header=stat_img.header)
+        wholebrain_mask_img.header.matrix[0].number_of_series_points = wholebrain_mask.shape[0]
+        nib.save(wholebrain_mask_img, str(stat_dtseries).replace("_stat.", "_mask."))
 
     def _process_multiple_metrics(self, metric_dict, fla_dir, run_id, iteration, metric_type):
         assert metric_type in self.MANDATORY_METRICS, f"metric type must be set to {self.MANDATORY_METRICS}"
@@ -309,10 +344,18 @@ class analyze_bootstrap:
             # Load merged data
             merged_img, merged_data = self._load_img_and_data(metric_dict[search_frequency])
             # Load bootstrap data
+            if metric_type == "stat":
+                bootstrap_metric_path = self._get_stat(fla_dir, run_id, search_frequency)
             if metric_type == "z_score":
                 bootstrap_metric_path = self._get_z_score(fla_dir, run_id, search_frequency)
             if metric_type == "phase_delay":
                 bootstrap_metric_path = self._get_phase_delay(fla_dir, run_id, search_frequency)
+            """
+            if metric_type == "pSNR":
+                bootstrap_metric_path = self._get_pSNR(fla_dir, run_id, search_frequency)
+            """
+            if metric_type == "p_value":
+                bootstrap_metric_path = self._get_p_value(fla_dir, run_id, search_frequency)
             bootstrap_data = nib.load(bootstrap_metric_path).get_fdata()
             merged_data[iteration,:] = bootstrap_data[0, :]
             merged_img = nib.Cifti2Image(merged_data, header=merged_img.header)
@@ -354,8 +397,11 @@ class analyze_bootstrap:
         """
         Outputs:
         Multiple metrics (iterated over frequencies)
+        - stat
         - Z-scores
         - phase delays
+        - pSNR
+        - p-value
         Single metric
         - task-locking
         """
@@ -363,20 +409,38 @@ class analyze_bootstrap:
             self.out_dir.mkdir(parents=True)
 
         # Multiple metrics
+        # stat
+        self.train_stat, self.test_stat = {}, {}
         # Z-scores
         self.train_z_scores, self.test_z_scores = {}, {}
         # Phase delays
         self.train_phase_delays, self.test_phase_delays = {}, {}
+        # pSNR
+        #self.train_pSNR, self.test_pSNR = {}, {}
+        # p-value
+        self.train_p_value, self.test_p_value = {}, {}
         # Create empty outputs
         for search_frequency in self.search_frequencies:
+            self.train_stat[search_frequency] = self.out_dir / f"{self.prefix}_f-{search_frequency}_data-train_n-{self.n_iters}_stat.dtseries.nii"
+            self.test_stat[search_frequency] = self.out_dir / f"{self.prefix}_f-{search_frequency}_data-test_n-{self.n_iters}_stat.dtseries.nii"
             self.train_z_scores[search_frequency] = self.out_dir / f"{self.prefix}_f-{search_frequency}_data-train_n-{self.n_iters}_z_score.dtseries.nii"
             self.test_z_scores[search_frequency] = self.out_dir / f"{self.prefix}_f-{search_frequency}_data-test_n-{self.n_iters}_z_score.dtseries.nii"
             self.train_phase_delays[search_frequency] = self.out_dir / f"{self.prefix}_f-{search_frequency}_data-train_n-{self.n_iters}_phasedelay.dtseries.nii"
             self.test_phase_delays[search_frequency] = self.out_dir / f"{self.prefix}_f-{search_frequency}_data-test_n-{self.n_iters}_phasedelay.dtseries.nii"
+            #self.train_pSNR[search_frequency] = self.out_dir / f"{self.prefix}_f-{search_frequency}_data-train_n-{self.n_iters}_pSNR.dtseries.nii"
+            #self.test_pSNR[search_frequency] = self.out_dir / f"{self.prefix}_f-{search_frequency}_data-test_n-{self.n_iters}_pSNR.dtseries.nii"
+            self.train_p_value[search_frequency] = self.out_dir / f"{self.prefix}_f-{search_frequency}_data-train_n-{self.n_iters}_p_value.dtseries.nii"
+            self.test_p_value[search_frequency] = self.out_dir / f"{self.prefix}_f-{search_frequency}_data-test_n-{self.n_iters}_p_value.dtseries.nii"
+            self._set_up_empty_dtseries(self.train_stat[search_frequency])
+            self._set_up_empty_dtseries(self.test_stat[search_frequency])
             self._set_up_empty_dtseries(self.train_z_scores[search_frequency])
             self._set_up_empty_dtseries(self.test_z_scores[search_frequency])
             self._set_up_empty_dtseries(self.train_phase_delays[search_frequency])
             self._set_up_empty_dtseries(self.test_phase_delays[search_frequency])
+            #self._set_up_empty_dtseries(self.train_pSNR[search_frequency])
+            #self._set_up_empty_dtseries(self.test_pSNR[search_frequency])
+            self._set_up_empty_dtseries(self.train_p_value[search_frequency])
+            self._set_up_empty_dtseries(self.test_p_value[search_frequency])
         self.tasklock = self.out_dir / f"{self.prefix}_n-{self.n_iters}_tasklock.dtseries.nii"
         self._set_up_empty_dtseries(self.tasklock)
 
@@ -393,6 +457,13 @@ class analyze_bootstrap:
         )
         img.header.matrix[0].number_of_series_points = self.n_iters
         nib.save(img, out_file)
+    
+    def _get_stat(self, fla_glm_dir, run_id, search_f):
+        base = self._get_base(run_id, search_f)
+        dscalar = fla_glm_dir / f"{base}_stat.dscalar.nii"
+        assert dscalar.exists(), f"{dscalar} does not exist."
+        
+        return dscalar
         
     def _get_z_score(self, fla_glm_dir, run_id, search_f):
         base = self._get_base(run_id, search_f)
@@ -404,6 +475,20 @@ class analyze_bootstrap:
     def _get_phase_delay(self, fla_glm_dir, run_id, search_f):
         base = self._get_base(run_id, search_f)
         dscalar = fla_glm_dir / f"{base}_phasedelay.dscalar.nii"
+        assert dscalar.exists(), f"{dscalar} does not exist."
+        
+        return dscalar
+    
+    def _get_pSNR(self, fla_glm_dir, run_id, search_f):
+        base = self._get_base(run_id, search_f)
+        dscalar = fla_glm_dir / f"{base}_pSNR.dscalar.nii"
+        assert dscalar.exists(), f"{dscalar} does not exist."
+        
+        return dscalar
+    
+    def _get_p_value(self, fla_glm_dir, run_id, search_f):
+        base = self._get_base(run_id, search_f)
+        dscalar = fla_glm_dir / f"{base}_p_value.dscalar.nii"
         assert dscalar.exists(), f"{dscalar} does not exist."
         
         return dscalar
@@ -426,6 +511,7 @@ def run_bootstrap(
     denoising_strategy: Annotated[str, typer.Option()],
     n_iterations: Annotated[int, typer.Option()], 
     base_out_dir: Annotated[str, typer.Option()],
+    no_bootstrap: bool = typer.Option(False, "--no-bootstrap", help="Turn off bootstrapping"),
 ):
 
     # Logging
@@ -523,8 +609,10 @@ def run_bootstrap(
     )
     
     """
-    Run first-level analysis on ALL bold runs grouped by session id
+    Run first-level analysis on ALL bold runs grouped by session id and run id
     """
+
+    """ COMMENT OUT SESSION-LEVEL FLA
     # Group bold runs by session id
     print("Group bold runs by session id:")
     ses_id_bold_mappings = {}
@@ -571,6 +659,11 @@ def run_bootstrap(
             bold_nifti, mask_nifti, 
             design_matrix, time_window, search_frequencies, TR
         )
+    """
+
+    if no_bootstrap:
+        print("--no-bootstrap set. Exiting.")
+        sys.exit()
 
     """
     Set-up analysis class for bootstrapping

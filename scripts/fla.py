@@ -103,9 +103,10 @@ def run_level(
 
         
         # Skip if processed already
-        processed_flag = Path(f"{_out_dir}/sub-{sub_id}/ses-{ses_id}/task-{task_id}/run-{run_id}/GLM").exists()
+        GLM_DIR = Path(f"{_out_dir}/sub-{sub_id}/ses-{ses_id}/task-{task_id}/run-{run_id}/GLM")
+        processed_flag = GLM_DIR.exists()
         if processed_flag:
-            print("Skipping.")
+            print(f"Skipping.\n{GLM_DIR} exists.")
             continue
 
         # Instantiate path object
