@@ -34,7 +34,8 @@ class FirstLevelAnalysis:
         time_window: Tuple[float, float],
         search_frequencies: List[float],
         TR: Optional[float] = None,
-        data_windowed = False,
+        data_windowed: bool = False,
+        fsnr_offset: float = .025,
     ):
         # Set-up
         self.derivatives_dir = Path(derivatives_dir)
@@ -44,6 +45,7 @@ class FirstLevelAnalysis:
         self._make_directory_tree()
         self.design_matrix = design_matrix
         self.search_frequencies = search_frequencies
+        self.fsnr_offset = fsnr_offset
         self.bids_base_str = f"sub-{self.bids_info['sub']}_ses-{self.bids_info['ses']}_task-{self.bids_info['task']}_run-{self.bids_info['run']}"
         if TR is None:
             self.TR: float = float(nib.load(self.bold_path).header.get_zooms()[-1])
@@ -60,6 +62,7 @@ class FirstLevelAnalysis:
         self,
         save_windowed_bold: bool = False,
         save_denoised_bold: bool = False,
+        save_frequency_snrs: bool = False,
         save_additional_single_contrasts: Union[str, List[str], None] = None,
     ) -> None:
         self.save_single_contrast_list = self._get_single_contrast_list(
@@ -174,6 +177,67 @@ class FirstLevelAnalysis:
                     denoised_img,
                     f"{self.directory_tree['GLM']}/{self.bids_base_str}_{PATH_STEMS['denoised']}",
                 )
+
+        # messy code for calculating SNR of a frequency's peak
+        if save_frequency_snrs:
+            for search_f in self.search_frequencies:
+                outbase = f"frequency-{search_f}_pSNR.nii.gz"
+                save_nifti = f"{self.directory_tree['GLM']}/{self.bids_base_str}_{outbase}"
+                bold_img = nib.load(self.bold_path)
+                bold_data = bold_img.get_fdata()
+                coords = bold_img.shape[:-1]
+                n_dims = len(coords)
+                indices = [0] * n_dims
+                fsnr_data = np.zeros(coords)
+                while indices[0] < coords[0]:
+                    current_coordinate = tuple(indices)
+                    ts_indices = current_coordinate + (slice(None),)
+                    ts = bold_data[ts_indices]
+                    fsnr = self._calculate_fsnr_welch(
+                        ts, 
+                        search_f, 
+                        [search_f-self.fsnr_offset, search_f+self.fsnr_offset],
+                    )
+                    fsnr_data[current_coordinate] = fsnr
+                    for i in range(n_dims-1,-1,-1):
+                        indices[i]+=1
+                        if indices[i] < coords[i]:
+                            break
+                        else:
+                            indices[i] = 0
+                    else:
+                        break
+                fsnr_img = nib.Nifti1Image(fsnr_data, affine=bold_img.affine, header=bold_img.header)
+                nib.save(fsnr_img, save_nifti)
+
+    def _find_closest_index(self, array: np.ndarray, value: float):
+        # Calculate the absolute differences between each element and the target value
+        absolute_differences = np.abs(array - value)
+        
+        # Find the index with the minimum absolute difference
+        closest_index = np.argmin(absolute_differences)
+        
+        return closest_index
+
+    def _calculate_fsnr_welch(
+        self,
+        time_series: np.ndarray, 
+        signal_frequency: float, 
+        noise_frequency_range: List[float], 
+        nperseg: int = 256,
+    ) -> float:
+
+        from scipy import signal 
+
+        fs = 1/self.TR
+        frequencies, power_density = signal.welch(time_series, fs=fs, nperseg=nperseg)
+        signal_bin = self._find_closest_index(frequencies, signal_frequency)
+        noise_bins = [self._find_closest_index(frequencies, f) for f in noise_frequency_range]
+        signal_power = power_density[signal_bin]
+        noise_power = np.sum(power_density[noise_bins])
+        fsnr = signal_power / noise_power
+
+        return fsnr
 
     def _get_single_contrast_list(
         self, save_additional_single_contrasts: Union[str, List[str], None]

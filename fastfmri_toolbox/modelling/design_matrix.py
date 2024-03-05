@@ -495,7 +495,7 @@ class DesignMatrix:
     def _get_int_scaling_factor(self, x: float, tolerance: float = 0.0001) -> Tuple[int, int]:
 
         if x == int(x):
-            return 1  # No decimals needed, it's already an integer
+            return 1,1  # No decimals needed, it's already an integer
         
         decimals = 0
         while x != int(x):
