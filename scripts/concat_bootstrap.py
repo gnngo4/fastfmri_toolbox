@@ -511,6 +511,7 @@ def run_merge_bootstrap(
     time_window: Annotated[Tuple[int, int], typer.Option()],
     TR: Annotated[float, typer.Option()],
     base_dir: Annotated[str, typer.Option()],
+    pcorr: Annotated[str, typer.Option()],
     roi_task_frequency_intersect_with: Annotated[Optional[float], typer.Option()] = None,
     control_roi_size: Annotated[bool, typer.Option("--control_roi_size")] = False,
 ):
@@ -532,7 +533,7 @@ def run_merge_bootstrap(
     base_bootstrap_dir_wc = (
         f"experiment-{experiment_id}"
         f"_mri-{mri_id}_smooth-{smooth_mm}_truncate-{time_window[0]}-{time_window[1]}"
-        f"_n-{n_iterations}_batch-*_desc-{desc_id}_bootstrap"
+        f"_n-{n_iterations}_batch-*_desc-{desc_id}_pval-{pcorr}_bootstrap"
     )
     n_batches_found = len(search(base_dir, f"{base_bootstrap_dir_wc}/{sub_id}"))
     assert n_batches_found == n_batches_expected, f"{n_batches_found} bootstrap directories were found for {sub_id}. [Expected: {n_batches_expected}]"
@@ -542,7 +543,7 @@ def run_merge_bootstrap(
         out_dir_base = (
             f"experiment-{experiment_id}"
             f"_mri-{mri_id}_smooth-{smooth_mm}_truncate-{time_window[0]}-{time_window[1]}"
-            f"_n-{n_iterations*n_batches_expected}_batch-merged_desc-{desc_id}_roi-{roi_task_id}-{roi_task_frequency}_fo-{fractional_overlap_threshold}_bootstrap"
+            f"_n-{n_iterations*n_batches_expected}_batch-merged_desc-{desc_id}_roi-{roi_task_id}-{roi_task_frequency}_pval-{pcorr}_fo-{fractional_overlap_threshold}_bootstrap"
         )
     else:
         if control_roi_size:
@@ -550,13 +551,13 @@ def run_merge_bootstrap(
             out_dir_base = (
                 f"experiment-{experiment_id}"
                 f"_mri-{mri_id}_smooth-{smooth_mm}_truncate-{time_window[0]}-{time_window[1]}"
-                f"_n-{n_iterations*n_batches_expected}_batch-merged_desc-{desc_id}_roi-{roi_task_id}-{roi_task_frequency}_controlroisizetomatch-{roi_task_frequency_intersect_with}_fo-{fractional_overlap_threshold}_bootstrap"
+                f"_n-{n_iterations*n_batches_expected}_batch-merged_desc-{desc_id}_roi-{roi_task_id}-{roi_task_frequency}_controlroisizetomatch-{roi_task_frequency_intersect_with}_pval-{pcorr}_fo-{fractional_overlap_threshold}_bootstrap"
             )
         else:
             out_dir_base = (
                 f"experiment-{experiment_id}"
                 f"_mri-{mri_id}_smooth-{smooth_mm}_truncate-{time_window[0]}-{time_window[1]}"
-                f"_n-{n_iterations*n_batches_expected}_batch-merged_desc-{desc_id}_roi-{roi_task_id}-{roi_task_frequency}-{roi_task_frequency_intersect_with}_fo-{fractional_overlap_threshold}_bootstrap"
+                f"_n-{n_iterations*n_batches_expected}_batch-merged_desc-{desc_id}_roi-{roi_task_id}-{roi_task_frequency}-{roi_task_frequency_intersect_with}_pval-{pcorr}_fo-{fractional_overlap_threshold}_bootstrap"
             )
 
     out_dir = base_dir / out_dir_base / sub_id / "bootstrap"
@@ -618,7 +619,7 @@ def run_merge_bootstrap(
             n_batches_expected
         )
     data_dict["wholebrain_mask"] = combine_bootstrapped_dtseries(
-        sorted(search(base_dir, f"{base_bootstrap_dir_wc}/{sub_id}/bootstrap/*task-{_task_id}*_f-{search_frequencies[0]}_data-test_n-{n_iterations}_mask.dtseries.nii")),
+        sorted(search(base_dir, f"{base_bootstrap_dir_wc}/{sub_id}/bootstrap/*task-{_task_id}Q*_f-{search_frequencies[0]}_data-test_n-{n_iterations}_mask.dtseries.nii")),
         out_dir / f"{sub_id}_ses-main_task-{_task_id}_f-{search_frequencies[0]}_data-test_n-{n_batches_expected*n_iterations}_mask.dtseries.nii",
         n_batches_expected
     )
@@ -768,7 +769,11 @@ def run_merge_bootstrap(
                         f"task-{task_id}_phasedtimeseries-no_phaseadjusted-yes_f-{search_f}_bold",
                         f"task-{task_id}_phasedtimeseries-yes_phaseadjusted-yes_f-{search_f}_bold",
                     ], [unphased_power, unphased_pd_power, unphased_bold, phased_bold, unphased_pd_bold, phased_pd_bold]):
-                        store_bootstrapped_data[_key] = np.concatenate((store_bootstrapped_data[_key], _bold[:,np.newaxis]), axis=1)
+                        try:
+                            store_bootstrapped_data[_key] = np.concatenate((store_bootstrapped_data[_key], _bold[:,np.newaxis]), axis=1)
+                        except:
+                            print(f"Could not concatenate: {_key}")
+                            continue
 
             # store data: frequency spectrum of all vertices in ROI
             # store data: timeseries for all vertices in ROI

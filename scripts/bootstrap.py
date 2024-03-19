@@ -216,6 +216,7 @@ class analyze_bootstrap:
         sub_id, ses_id, task_id,
         out_dir,
         template_dtseries,
+        fdr_correct=True,
     ):
 
         self.out_dir = Path(out_dir)
@@ -227,6 +228,7 @@ class analyze_bootstrap:
         self.task_id = task_id
         self.template_dtseries = template_dtseries
         self.prefix = f"sub-{sub_id}_ses-{ses_id}_task-{task_id}"
+        self.fdr_correct = fdr_correct
         # Set-up all outputs
         self._setup_outputs()
         # Assertions
@@ -279,8 +281,8 @@ class analyze_bootstrap:
             self._calculate_mean_std_metric(self.train_p_value[search_frequency], "_p_value.")
             self._calculate_mean_std_metric(self.test_p_value[search_frequency], "_p_value.")
             # Overlap
-            self._calculate_activation_overlap(self.train_stat[search_frequency], self.train_p_value[search_frequency])
-            self._calculate_activation_overlap(self.test_stat[search_frequency], self.test_p_value[search_frequency])
+            self._calculate_activation_overlap(self.train_stat[search_frequency], self.train_p_value[search_frequency], fdr_correct=self.fdr_correct)
+            self._calculate_activation_overlap(self.test_stat[search_frequency], self.test_p_value[search_frequency], fdr_correct=self.fdr_correct)
         # Mean & stdev
         self._calculate_mean_std_metric(self.tasklock, "_tasklock.")
 
@@ -303,6 +305,7 @@ class analyze_bootstrap:
         self, 
         stat_dtseries, 
         p_value_dtseries,
+        fdr_correct = True,
     ):
         # Load img and data
         stat_img = nib.load(stat_dtseries)
@@ -316,10 +319,13 @@ class analyze_bootstrap:
             _wholebrain_mask = _stat_data > 0
             n_vertices = _wholebrain_mask.sum()
             corrected_pvalue = np.zeros_like(_wholebrain_mask).astype(float)
-            qvalues = sm.multipletests(
-                _pval_data[_wholebrain_mask], method='fdr_bh'
-            )[1]
-            corrected_pvalue[_wholebrain_mask] = qvalues
+            if fdr_correct:
+                qvalues = sm.multipletests(
+                    _pval_data[_wholebrain_mask], method='fdr_bh'
+                )[1]
+                corrected_pvalue[_wholebrain_mask] = qvalues
+            else:
+                corrected_pvalue[_wholebrain_mask] = _pval_data[_wholebrain_mask]
             _corrected_pvalue_mask = ( (corrected_pvalue < .05) * _wholebrain_mask ).astype(float)[np.newaxis,:]
             _wholebrain_mask = _wholebrain_mask.astype(float)[np.newaxis,:]
             if i == 0:
@@ -512,8 +518,9 @@ def run_bootstrap(
     n_iterations: Annotated[int, typer.Option()], 
     base_out_dir: Annotated[str, typer.Option()],
     no_bootstrap: bool = typer.Option(False, "--no-bootstrap", help="Turn off bootstrapping"),
+    fdr_correction: bool = typer.Option(False, "--fdr-correction", help="Turn off fdr correction (use uncorrected p-value)")
 ):
-
+    
     # Logging
     print(
         f" Experiment ID: {experiment_id}\n",
@@ -674,6 +681,7 @@ def run_bootstrap(
         search_frequencies,
         sub_id, ses_id, task_id,
         out_dir, all_average,
+        fdr_correct=fdr_correction,
     )
 
     """
