@@ -183,7 +183,7 @@ def run_fla(
         TR = TR,
         data_windowed = True,
     )
-    fla.run_frequency_glm(save_frequency_snrs=False)
+    fla.run_frequency_glm(save_frequency_snrs=True)
     convert_niftis_to_ciftis(
         sub_id, 
         ses_id, 
@@ -234,7 +234,7 @@ class analyze_bootstrap:
         # Assertions
         assert self.parent_fla_dir.exists(), f"{self.parent_fla_dir} does not exist."
         # Global var
-        self.MANDATORY_METRICS = ["stat", "z_score", "phase_delay", "p_value"]
+        self.MANDATORY_METRICS = ["stat", "z_score", "phase_delay", "p_value","power","pSNR"]
         self.z_increment = 0.5
         self.z_max = 10.1
 
@@ -261,8 +261,10 @@ class analyze_bootstrap:
         self._process_multiple_metrics(self.test_z_scores, test_fla_dir, test_run_id, iteration, "z_score")
         self._process_multiple_metrics(self.train_phase_delays, train_fla_dir, train_run_id, iteration, "phase_delay")
         self._process_multiple_metrics(self.test_phase_delays, test_fla_dir, test_run_id, iteration, "phase_delay")
-        #self._process_multiple_metrics(self.train_pSNR, train_fla_dir, train_run_id, iteration, "pSNR")
-        #self._process_multiple_metrics(self.test_pSNR, test_fla_dir, test_run_id, iteration, "pSNR")
+        self._process_multiple_metrics(self.train_power, train_fla_dir, train_run_id, iteration, "power")
+        self._process_multiple_metrics(self.test_power, test_fla_dir, test_run_id, iteration, "power")
+        self._process_multiple_metrics(self.train_pSNR, train_fla_dir, train_run_id, iteration, "pSNR")
+        self._process_multiple_metrics(self.test_pSNR, test_fla_dir, test_run_id, iteration, "pSNR")
         self._process_multiple_metrics(self.train_p_value, train_fla_dir, train_run_id, iteration, "p_value")
         self._process_multiple_metrics(self.test_p_value, test_fla_dir, test_run_id, iteration, "p_value")
         self._process_tasklock_metric(train_average, test_average, iteration)
@@ -276,8 +278,10 @@ class analyze_bootstrap:
             self._calculate_mean_std_metric(self.test_z_scores[search_frequency], "_z_score.")
             self._calculate_mean_std_metric(self.train_phase_delays[search_frequency], "_phasedelay.")
             self._calculate_mean_std_metric(self.test_phase_delays[search_frequency], "_phasedelay.")
-            #self._calculate_mean_std_metric(self.train_pSNR[search_frequency], "_pSNR.")
-            #self._calculate_mean_std_metric(self.test_pSNR[search_frequency], "_pSNR.")
+            self._calculate_mean_std_metric(self.train_power[search_frequency], "_power.")
+            self._calculate_mean_std_metric(self.test_power[search_frequency], "_power.")
+            self._calculate_mean_std_metric(self.train_pSNR[search_frequency], "_pSNR.")
+            self._calculate_mean_std_metric(self.test_pSNR[search_frequency], "_pSNR.")
             self._calculate_mean_std_metric(self.train_p_value[search_frequency], "_p_value.")
             self._calculate_mean_std_metric(self.test_p_value[search_frequency], "_p_value.")
             # Overlap
@@ -356,10 +360,10 @@ class analyze_bootstrap:
                 bootstrap_metric_path = self._get_z_score(fla_dir, run_id, search_frequency)
             if metric_type == "phase_delay":
                 bootstrap_metric_path = self._get_phase_delay(fla_dir, run_id, search_frequency)
-            """
+            if metric_type == "power":
+                bootstrap_metric_path = self._get_power(fla_dir, run_id, search_frequency)
             if metric_type == "pSNR":
                 bootstrap_metric_path = self._get_pSNR(fla_dir, run_id, search_frequency)
-            """
             if metric_type == "p_value":
                 bootstrap_metric_path = self._get_p_value(fla_dir, run_id, search_frequency)
             bootstrap_data = nib.load(bootstrap_metric_path).get_fdata()
@@ -406,6 +410,7 @@ class analyze_bootstrap:
         - stat
         - Z-scores
         - phase delays
+        - power
         - pSNR
         - p-value
         Single metric
@@ -421,8 +426,10 @@ class analyze_bootstrap:
         self.train_z_scores, self.test_z_scores = {}, {}
         # Phase delays
         self.train_phase_delays, self.test_phase_delays = {}, {}
+        # Power
+        self.train_power, self.test_power = {}, {}
         # pSNR
-        #self.train_pSNR, self.test_pSNR = {}, {}
+        self.train_pSNR, self.test_pSNR = {}, {}
         # p-value
         self.train_p_value, self.test_p_value = {}, {}
         # Create empty outputs
@@ -433,8 +440,10 @@ class analyze_bootstrap:
             self.test_z_scores[search_frequency] = self.out_dir / f"{self.prefix}_f-{search_frequency}_data-test_n-{self.n_iters}_z_score.dtseries.nii"
             self.train_phase_delays[search_frequency] = self.out_dir / f"{self.prefix}_f-{search_frequency}_data-train_n-{self.n_iters}_phasedelay.dtseries.nii"
             self.test_phase_delays[search_frequency] = self.out_dir / f"{self.prefix}_f-{search_frequency}_data-test_n-{self.n_iters}_phasedelay.dtseries.nii"
-            #self.train_pSNR[search_frequency] = self.out_dir / f"{self.prefix}_f-{search_frequency}_data-train_n-{self.n_iters}_pSNR.dtseries.nii"
-            #self.test_pSNR[search_frequency] = self.out_dir / f"{self.prefix}_f-{search_frequency}_data-test_n-{self.n_iters}_pSNR.dtseries.nii"
+            self.train_power[search_frequency] = self.out_dir / f"{self.prefix}_f-{search_frequency}_data-train_n-{self.n_iters}_power.dtseries.nii"
+            self.test_power[search_frequency] = self.out_dir / f"{self.prefix}_f-{search_frequency}_data-test_n-{self.n_iters}_power.dtseries.nii"
+            self.train_pSNR[search_frequency] = self.out_dir / f"{self.prefix}_f-{search_frequency}_data-train_n-{self.n_iters}_pSNR.dtseries.nii"
+            self.test_pSNR[search_frequency] = self.out_dir / f"{self.prefix}_f-{search_frequency}_data-test_n-{self.n_iters}_pSNR.dtseries.nii"
             self.train_p_value[search_frequency] = self.out_dir / f"{self.prefix}_f-{search_frequency}_data-train_n-{self.n_iters}_p_value.dtseries.nii"
             self.test_p_value[search_frequency] = self.out_dir / f"{self.prefix}_f-{search_frequency}_data-test_n-{self.n_iters}_p_value.dtseries.nii"
             self._set_up_empty_dtseries(self.train_stat[search_frequency])
@@ -443,8 +452,10 @@ class analyze_bootstrap:
             self._set_up_empty_dtseries(self.test_z_scores[search_frequency])
             self._set_up_empty_dtseries(self.train_phase_delays[search_frequency])
             self._set_up_empty_dtseries(self.test_phase_delays[search_frequency])
-            #self._set_up_empty_dtseries(self.train_pSNR[search_frequency])
-            #self._set_up_empty_dtseries(self.test_pSNR[search_frequency])
+            self._set_up_empty_dtseries(self.train_power[search_frequency])
+            self._set_up_empty_dtseries(self.test_power[search_frequency])
+            self._set_up_empty_dtseries(self.train_pSNR[search_frequency])
+            self._set_up_empty_dtseries(self.test_pSNR[search_frequency])
             self._set_up_empty_dtseries(self.train_p_value[search_frequency])
             self._set_up_empty_dtseries(self.test_p_value[search_frequency])
         self.tasklock = self.out_dir / f"{self.prefix}_n-{self.n_iters}_tasklock.dtseries.nii"
@@ -481,6 +492,13 @@ class analyze_bootstrap:
     def _get_phase_delay(self, fla_glm_dir, run_id, search_f):
         base = self._get_base(run_id, search_f)
         dscalar = fla_glm_dir / f"{base}_phasedelay.dscalar.nii"
+        assert dscalar.exists(), f"{dscalar} does not exist."
+        
+        return dscalar
+    
+    def _get_power(self, fla_glm_dir, run_id, search_f):
+        base = self._get_base(run_id, search_f)
+        dscalar = fla_glm_dir / f"{base}_power.dscalar.nii"
         assert dscalar.exists(), f"{dscalar} does not exist."
         
         return dscalar

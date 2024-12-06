@@ -250,45 +250,6 @@ def get_average_bold(dtseries, normalize_type = "z_score"):
 
     return data
 
-def create_bootstrapped_metric_map_from_roi_data(roi_data, roi_coords, dtseries_template, dtseries_out):
-    """
-    """
-    n_vertices_in_roi, n_bootstraps_in_roi = roi_data.shape
-    assert roi_coords.sum() == n_vertices_in_roi
-
-    base_img = nib.load(dtseries_template)
-    n_bootstraps_in_template, n_vertices_in_template = base_img.get_fdata().shape
-
-    data = np.zeros((n_bootstraps_in_roi, n_vertices_in_template))
-    for n in range(n_bootstraps_in_roi):
-        data[n, roi_coords] = roi_data[:, n]
-    
-    new_img = nib.Cifti2Image(data, header=base_img.header)
-    new_img.header.matrix[0].number_of_series_points = n_bootstraps_in_roi
-
-    nib.save(new_img, dtseries_out)
-
-def create_bootstrapped_power_metric_map_from_roi_data(bootstrapped_data, frequency, task_id, data_id, dtseries_template, dtseries_out):
-    
-    frequency_grid_key = f"data-{data_id}_task-{task_id}_roi_frequencies"
-    roi_data = f"data-{data_id}_task-{task_id}_roi_power"
-
-    frequency_grid = bootstrapped_data[frequency_grid_key]
-    roi_data = bootstrapped_data[roi_data]
-    roi_coords = bootstrapped_data["roi_coords"]
-
-    abs_diff = np.abs(frequency_grid - frequency)
-    closest_index = np.argmin(abs_diff)
-    
-    print(f"Frequency of interest: {frequency} [{frequency_grid[closest_index]}]")
-
-    # Extract power spectrum data for the specified frquency
-    roi_data = roi_data[closest_index, :, :]
-
-    create_bootstrapped_metric_map_from_roi_data(roi_data, roi_coords, dtseries_template, dtseries_out)
-
-    assert Path(dtseries_out).exists(), f"{dtseries_out} does not exist."
-
 # Processing tools
 def process_phase_delay(
     data: np.ndarray,
@@ -402,81 +363,6 @@ def calculate_frequency_spectrum(bold_data, TR):
         return fs, power
 
 """
-Train-test reliability measures
-"""
-def _estimate_reliability_from_all_vertex_data(bootstrapped_data, train_key, test_key, circ_r=False):
-
-    from astropy.stats import circcorrcoef
-    from scipy.stats import pearsonr
-
-    x = bootstrapped_data[train_key]
-    y = bootstrapped_data[test_key]
-    roi_coords = bootstrapped_data["roi_coords"]
-
-    n_bootstraps = x.shape[0]
-
-    reliability = np.zeros((n_bootstraps,))
-    for n in range(n_bootstraps):
-        if circ_r:
-            reliability[n] = circcorrcoef(x[n, roi_coords], y[n, roi_coords])
-        else:
-            reliability[n], _ = pearsonr(x[n,roi_coords], y[n,roi_coords])
-
-    return reliability
-
-def _estimate_reliability_of_frequency_from_roi_data(bootstrapped_data, frequency_grid_key, train_key, test_key, frequency):
-
-    from scipy.stats import pearsonr
-
-    frequency_grid = bootstrapped_data[frequency_grid_key]
-    x = bootstrapped_data[train_key]
-    y = bootstrapped_data[test_key]
-
-    abs_diff = np.abs(frequency_grid - frequency)
-    closest_index = np.argmin(abs_diff)
-
-    print(f"Frequency of interest: {frequency} [{frequency_grid[closest_index]}]")
-
-    n_frequencies, n_vertex, n_bootstraps = x.shape
-
-    reliability = np.zeros((n_bootstraps,))
-    for n in range(n_bootstraps):
-        reliability[n], _ = pearsonr(
-            x[closest_index, :, n],
-            y[closest_index, :, n],
-        )
-
-    return reliability
-
-def train_test_reliability(bootstrapped_data, metric, frequency=None, task_id=None):
-
-    METRICS = ["phasedelay", "zscore", "power"]
-    assert metric in METRICS, f"{metric} must be in {METRICS}"
-
-    if metric == "power":
-        assert frequency is not None, f"Specify frequency for extracting power."
-        assert task_id is not None, f"Specify task_id"
-
-    if metric == "phasedelay":
-        train_key = "data-train_roi_phase_delay"
-        test_key = "data-test_roi_phase_delay"
-
-        return _estimate_reliability_from_all_vertex_data(bootstrapped_data, train_key, test_key, circ_r=True)
-    
-    if metric == "zscore":
-        train_key = "data-train_roi_z_score"
-        test_key = "data-test_roi_z_score"
-
-        return _estimate_reliability_from_all_vertex_data(bootstrapped_data, train_key, test_key, circ_r=False)
-
-    if metric == "power":
-        frequency_grid_key = f"data-train_task-{task_id}_roi_frequencies"
-        train_key = f"data-train_task-{task_id}_roi_power"
-        test_key = f"data-test_task-{task_id}_roi_power"
-
-        return _estimate_reliability_of_frequency_from_roi_data(bootstrapped_data, frequency_grid_key, train_key, test_key, frequency)
-
-"""
 Other
 """
 def get_timepoints(time_window, TR):
@@ -577,6 +463,13 @@ def run_merge_bootstrap(
         assert roi_task_frequency_intersect_with in available_frequencies, f"{roi_task_frequency_intersect_with} not in {available_frequencies}"
 
     roi_task_id = get_updated_task_id_name(base_dir, base_bootstrap_dir_wc, sub_id, roi_task_id) # Add task_id suffix (i.e., Q1/Q2)
+        
+    # Store task lock
+    data_dict[f"tasklock_task-{roi_task_id}"] = combine_bootstrapped_dtseries(
+        sorted(search(base_dir, f"{base_bootstrap_dir_wc}/{sub_id}/bootstrap/*task-{roi_task_id}*_n-{n_iterations}_tasklock.dtseries.nii")),
+        out_dir / f"{sub_id}_ses-main_task-{roi_task_id}_n-{n_batches_expected*n_iterations}_tasklock.dtseries.nii",
+        n_batches_expected
+    )
     for data_split_id in ["train", "test"]:
         # Store train/test splits across bootstraps for ROI task, and `TASK_CONDITIONS`
         data_dict[f"{data_split_id}_splits_task-{roi_task_id}"] = combine_bootstrapped_splits(
@@ -594,6 +487,18 @@ def run_merge_bootstrap(
                 n_iterations
             )
         # Store frequency-dependent bootstrapped files
+        # pSNR
+        data_dict[f"{data_split_id}_pSNR_task-{roi_task_id}_f-{roi_task_frequency}"] = combine_bootstrapped_dtseries(
+            sorted(search(base_dir, f"{base_bootstrap_dir_wc}/{sub_id}/bootstrap/*task-{roi_task_id}*_f-{roi_task_frequency}_data-{data_split_id}_n-{n_iterations}_pSNR.dtseries.nii")),
+            out_dir / f"{sub_id}_ses-main_task-{roi_task_id}_f-{roi_task_frequency}_data-{data_split_id}_n-{n_batches_expected*n_iterations}_pSNR.dtseries.nii",
+            n_batches_expected
+        )
+        # Power
+        data_dict[f"{data_split_id}_power_task-{roi_task_id}_f-{roi_task_frequency}"] = combine_bootstrapped_dtseries(
+            sorted(search(base_dir, f"{base_bootstrap_dir_wc}/{sub_id}/bootstrap/*task-{roi_task_id}*_f-{roi_task_frequency}_data-{data_split_id}_n-{n_iterations}_power.dtseries.nii")),
+            out_dir / f"{sub_id}_ses-main_task-{roi_task_id}_f-{roi_task_frequency}_data-{data_split_id}_n-{n_batches_expected*n_iterations}_power.dtseries.nii",
+            n_batches_expected
+        )
         # Phase delay
         data_dict[f"{data_split_id}_phase_delay_task-{roi_task_id}_f-{roi_task_frequency}"] = combine_bootstrapped_dtseries(
             sorted(search(base_dir, f"{base_bootstrap_dir_wc}/{sub_id}/bootstrap/*task-{roi_task_id}*_f-{roi_task_frequency}_data-{data_split_id}_n-{n_iterations}_phasedelay.dtseries.nii")),
@@ -656,9 +561,17 @@ def run_merge_bootstrap(
     store_bootstrapped_data["roi_coords"] = roi_coords
 
     """Load metrics from ROI 
+    - pSNR
+    - power
     - phase delays
     - z-scores
     """
+    # Load pSNR
+    train_pSNR_across_bootstrap = nib.load(data_dict[f"train_pSNR_task-{roi_task_id}_f-{roi_task_frequency}"]).get_fdata()
+    test_pSNR_across_bootstrap = nib.load(data_dict[f"test_pSNR_task-{roi_task_id}_f-{roi_task_frequency}"]).get_fdata()
+    # Load power
+    train_power_across_bootstrap = nib.load(data_dict[f"train_power_task-{roi_task_id}_f-{roi_task_frequency}"]).get_fdata()
+    test_power_across_bootstrap = nib.load(data_dict[f"test_power_task-{roi_task_id}_f-{roi_task_frequency}"]).get_fdata()
     # Load phase delays and process
     train_phase_delay_across_bootstrap = nib.load(data_dict[f"train_phase_delay_task-{roi_task_id}_f-{roi_task_frequency}"]).get_fdata()
     train_phase_delay_across_bootstrap = process_phase_delay(train_phase_delay_across_bootstrap, roi_task_frequency)
@@ -668,6 +581,10 @@ def run_merge_bootstrap(
     train_z_score_across_bootstrap = nib.load(data_dict[f"train_z_score_task-{roi_task_id}_f-{roi_task_frequency}"]).get_fdata()
     test_z_score_across_bootstrap = nib.load(data_dict[f"test_z_score_task-{roi_task_id}_f-{roi_task_frequency}"]).get_fdata()
     # Store loaded metrics & ROI coordinates
+    store_bootstrapped_data["data-train_roi_pSNR"] = train_pSNR_across_bootstrap
+    store_bootstrapped_data["data-test_roi_pSNR"] = test_pSNR_across_bootstrap
+    store_bootstrapped_data["data-train_roi_power"] = train_power_across_bootstrap
+    store_bootstrapped_data["data-test_roi_power"] = test_power_across_bootstrap
     store_bootstrapped_data["data-train_roi_phase_delay"] = train_phase_delay_across_bootstrap
     store_bootstrapped_data["data-test_roi_phase_delay"] = test_phase_delay_across_bootstrap
     store_bootstrapped_data["data-train_roi_z_score"] = train_z_score_across_bootstrap
@@ -701,11 +618,6 @@ def run_merge_bootstrap(
             test_roi_tps = np.hstack([tp[:,np.newaxis]]* n_vertices)
             # Phase delay
             train_roi_phase_delay = train_phase_delay_across_bootstrap[test_ix, roi_coords]
-            """
-            # Z-score
-            train_roi_z_score = train_z_score_across_bootstrap[test_ix, roi_coords]
-            test_roi_z_score = test_z_score_across_bootstrap[test_ix, roi_coords]
-            """
             # Get phase-shifted BOLD and associated timepoints
             pd_test_roi_tps, pd_test_roi_bold = calculate_roi_phase_shifted_bold(test_roi_bold, train_roi_phase_delay, time_window, TR)
             # Get rid of first volume (interpolation of phase-shifted case gives problem at first timepoint)
@@ -793,19 +705,6 @@ def run_merge_bootstrap(
                 store_bootstrapped_data[f"data-test_task-{task_id}_roi_power"] = np.concatenate((store_bootstrapped_data[f"data-test_task-{task_id}_roi_power"], test_roi_power[:,:,np.newaxis]), axis=2) 
                 store_bootstrapped_data[f"data-test_task-{task_id}_roi_bold"] = np.concatenate((store_bootstrapped_data[f"data-test_task-{task_id}_roi_bold"], test_roi_bold[:,:,np.newaxis]), axis=2)
                 store_bootstrapped_data[f"data-test_task-{task_id}_roi_phaseadjusted_bold"] = np.concatenate((store_bootstrapped_data[f"data-test_task-{task_id}_roi_phaseadjusted_bold"], pd_test_roi_bold[:,:,np.newaxis]), axis=2)
-
-    # Save power spectrums (masked by ROI)
-    dtseries_template = data_dict[f"train_z_score_task-{roi_task_id}_f-{roi_task_frequency}"]
-    for f, task_id, data_split in itertools.product(
-        search_frequencies, 
-        TASK_CONDITIONS, 
-        ["train", "test"],
-    ):
-        task_id = get_updated_task_id_name(base_dir, base_bootstrap_dir_wc, sub_id, task_id)
-        dtseries_out = out_dir / f"{sub_id}_ses-main_task-{task_id}_f-{f}_data-{data_split}_n-{n_batches_expected*n_iterations}_power.dtseries.nii"
-        create_bootstrapped_power_metric_map_from_roi_data(
-            store_bootstrapped_data, f, task_id, data_split, dtseries_template, dtseries_out
-        )
 
     # Save `store_bootstrapped_data` as pkl [ `out_dir`` / "bootstrapped_data.pkl"]
     save_bootstrapped_data(out_dir, _task_id, store_bootstrapped_data)

@@ -6,11 +6,9 @@ import fcntl
 
 from pathlib import Path
 from fla_utils import (
-    search,
     PathLoader,
     build_design_matrix,
     run_glm,
-    extract_glm_metrics,
 )
 
 app = typer.Typer()
