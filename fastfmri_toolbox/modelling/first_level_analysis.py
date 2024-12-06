@@ -178,37 +178,49 @@ class FirstLevelAnalysis:
                     f"{self.directory_tree['GLM']}/{self.bids_base_str}_{PATH_STEMS['denoised']}",
                 )
 
-        # messy code for calculating SNR of a frequency's peak
+        # messy code for calculating SNR of a frequency's peak, it only will calculate power spectrum on windowed data...
         if save_frequency_snrs:
-            for search_f in self.search_frequencies:
-                outbase = f"frequency-{search_f}_pSNR.nii.gz"
-                save_nifti = f"{self.directory_tree['GLM']}/{self.bids_base_str}_{outbase}"
-                bold_img = nib.load(self.bold_path)
-                bold_data = bold_img.get_fdata()
-                coords = bold_img.shape[:-1]
-                n_dims = len(coords)
-                indices = [0] * n_dims
-                fsnr_data = np.zeros(coords)
-                while indices[0] < coords[0]:
-                    current_coordinate = tuple(indices)
-                    ts_indices = current_coordinate + (slice(None),)
-                    ts = bold_data[ts_indices]
-                    fsnr = self._calculate_fsnr_welch(
-                        ts, 
-                        search_f, 
-                        [search_f-self.fsnr_offset, search_f+self.fsnr_offset],
-                    )
-                    fsnr_data[current_coordinate] = fsnr
-                    for i in range(n_dims-1,-1,-1):
-                        indices[i]+=1
-                        if indices[i] < coords[i]:
-                            break
+            if self.data_windowed:
+                for search_f in self.search_frequencies:
+                    fpower_outbase = f"frequency-{search_f}_power.nii.gz"
+                    fpower_save_nifti = f"{self.directory_tree['GLM']}/{self.bids_base_str}_{fpower_outbase}"
+                    fsnr_outbase = f"frequency-{search_f}_pSNR.nii.gz"
+                    fsnr_save_nifti = f"{self.directory_tree['GLM']}/{self.bids_base_str}_{fsnr_outbase}"
+                    bold_img = nib.load(self.bold_path)
+                    bold_data = bold_img.get_fdata()
+                    coords = bold_img.shape[:-1]
+                    n_dims = len(coords)
+                    indices = [0] * n_dims
+                    fpower_data = np.zeros(coords)
+                    fsnr_data = np.zeros(coords)
+                    while indices[0] < coords[0]:
+                        current_coordinate = tuple(indices)
+                        ts_indices = current_coordinate + (slice(None),)
+                        ts = bold_data[ts_indices]
+                        # Convert `ts` to fractional percent change
+                        ts_baseline = np.mean(ts)
+                        ts = (ts - ts_baseline) / ts_baseline
+                        fpower, fsnr = self._calculate_fsnr_welch(
+                            ts, 
+                            search_f, 
+                            [search_f-self.fsnr_offset, search_f+self.fsnr_offset],
+                        )
+                        fpower_data[current_coordinate] = fpower
+                        fsnr_data[current_coordinate] = fsnr
+                        for i in range(n_dims-1,-1,-1):
+                            indices[i]+=1
+                            if indices[i] < coords[i]:
+                                break
+                            else:
+                                indices[i] = 0
                         else:
-                            indices[i] = 0
-                    else:
-                        break
-                fsnr_img = nib.Nifti1Image(fsnr_data, affine=bold_img.affine, header=bold_img.header)
-                nib.save(fsnr_img, save_nifti)
+                            break
+                    fpower_img = nib.Nifti1Image(fpower_data, affine=bold_img.affine, header=bold_img.header)
+                    nib.save(fpower_img, fpower_save_nifti)
+                    fsnr_img = nib.Nifti1Image(fsnr_data, affine=bold_img.affine, header=bold_img.header)
+                    nib.save(fsnr_img, fsnr_save_nifti)
+            else:
+                raise ValueError(f"Set `data_windowed=True` to calculate power spectrum on non-windowed data.")
 
     def _find_closest_index(self, array: np.ndarray, value: float):
         # Calculate the absolute differences between each element and the target value
@@ -224,12 +236,12 @@ class FirstLevelAnalysis:
         time_series: np.ndarray, 
         signal_frequency: float, 
         noise_frequency_range: List[float], 
-        nperseg: int = 256,
     ) -> float:
 
         from scipy import signal 
 
         fs = 1/self.TR
+        nperseg = len(time_series)
         frequencies, power_density = signal.welch(time_series, fs=fs, nperseg=nperseg)
         signal_bin = self._find_closest_index(frequencies, signal_frequency)
         noise_bins = [self._find_closest_index(frequencies, f) for f in noise_frequency_range]
@@ -237,7 +249,7 @@ class FirstLevelAnalysis:
         noise_power = np.sum(power_density[noise_bins])
         fsnr = signal_power / noise_power
 
-        return fsnr
+        return signal_power, fsnr
 
     def _get_single_contrast_list(
         self, save_additional_single_contrasts: Union[str, List[str], None]
